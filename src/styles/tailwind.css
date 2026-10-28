@@ -1,0 +1,2 @@
+/* Tailwind 4: utilities for new UI; Eddy's own styles (app.css, editor.css) are unlayered, so they take precedence. */
+@import "tailwindcss";
