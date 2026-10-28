@@ -9,3 +9,6 @@ dist-server
 *.key.json
 service-account*.json
 dist-demo
+
+setup-log.txt
+setup-result.json

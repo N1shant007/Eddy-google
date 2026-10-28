@@ -15,4 +15,4 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
 USER node
 EXPOSE 8080
-CMD ["node", "dist-server/server.js"]
+CMD ["node", "dist-server/server.js", "--production"]

@@ -16,6 +16,10 @@ It is Eddy v2 rebuilt for the pipeline's stack and Google Cloud. A browser-only 
 
 ## Run locally (no Google Cloud needed)
 
+**Windows:** double-click `Setup Eddy (Windows).bat`. It installs Node.js if needed, the libraries, a private `.env` (passcode `eddy-local`), runs the tests, builds and starts Eddy on http://localhost:8080. Later, start it with `scripts\windows\start-eddy.bat`.
+
+**macOS / Linux:**
+
 ```bash
 npm install
 EDDY_STORAGE=local EDDY_PASSCODE=pick-one SESSION_SECRET=$(openssl rand -hex 32) npm run dev   # http://localhost:8080

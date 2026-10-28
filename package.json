@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && tsc -p tsconfig.server.json",
-    "start": "NODE_ENV=production node dist-server/server.js",
+    "start": "node dist-server/server.js --production",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run",
     "build:demo": "vite build --mode demo"

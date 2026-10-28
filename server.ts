@@ -57,4 +57,6 @@ async function main() {
   app.listen(config.port, () => console.log(`[eddy] listening on :${config.port} (${config.production ? 'production' : 'development'}, storage: ${config.storage}, AI: ${aiReady() ? [config.project || config.geminiApiKey ? `Gemini via ${aiMode()}` : '', config.openaiApiKey ? 'ChatGPT' : ''].filter(Boolean).join(' + ') : 'off'})`));
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main();
+// run when started directly (Windows paths compare case-insensitively)
+const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+if (process.argv[1] && same(fileURLToPath(import.meta.url), path.resolve(process.argv[1]))) main();

@@ -3,7 +3,7 @@ const env = process.env;
 
 export const config = {
   port: Number(env.PORT || 8080),
-  production: env.NODE_ENV === 'production',
+  production: env.NODE_ENV === 'production' || process.argv.includes('--production'),
   /** 'local' keeps data and audio in ./.data (development without Google Cloud) */
   storage: (env.EDDY_STORAGE || (env.EDDY_BUCKET ? 'gcp' : 'local')) as 'gcp' | 'local',
   dataDir: env.EDDY_DATA_DIR || '.data',
