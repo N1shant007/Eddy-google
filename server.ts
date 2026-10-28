@@ -25,14 +25,17 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export function createApi(store: Store = makeStore(), blobs: Blobs = makeBlobs()) {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', true);
+  app.set('trust proxy', config.trustProxyHops); // real client address for the passcode limiter
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     next();
   });
-  app.get('/healthz', (_req, res) => res.json({ ok: true, storage: config.storage, ai: aiReady() }));
+  // Cloud Run reserves some paths ending in "z" (like /healthz), so /api/health is the one to use there
+  const health = (_req: express.Request, res: express.Response) => res.json({ ok: true, storage: config.storage, ai: aiReady() });
+  app.get('/healthz', health);
+  app.get('/api/health', health);
   app.use('/api', sessionRoutes());
   app.use('/api', requireUser, dataRoutes(store), audioRoutes(blobs), aiRoutes(), pipelineRoutes(store, blobs));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));

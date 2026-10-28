@@ -9,9 +9,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const FAKE_KEY = 'AIza' + 'Sy' + 'X'.repeat(33);
 const FAKE_OPENAI = 'sk-' + 'proj-' + 'Y'.repeat(40);
+/* EDDY_TEST_STORAGE=gcp runs the same tests against Firestore + Cloud Storage
+   (the emulators started by scripts/test-gcp.mjs, or real ones). */
 const dir = mkdtempSync(path.join(tmpdir(), 'eddy-test-'));
+const gcp = process.env.EDDY_TEST_STORAGE === 'gcp';
+Object.assign(process.env, gcp
+  ? { EDDY_STORAGE: 'gcp', EDDY_BUCKET: process.env.EDDY_BUCKET || 'eddy-test', FIRESTORE_PREFIX: `t${Date.now().toString(36)}_` }
+  : { EDDY_STORAGE: 'local', EDDY_DATA_DIR: dir });
 Object.assign(process.env, {
-  EDDY_STORAGE: 'local', EDDY_DATA_DIR: dir, EDDY_PASSCODE: 'open-sesame', SESSION_SECRET: 'x'.repeat(40),
+  EDDY_PASSCODE: 'open-sesame', SESSION_SECRET: 'x'.repeat(40),
   PIPELINE_TOKEN: 'pipe-token-123', GOOGLE_CLOUD_PROJECT: 'test-project', ALLOWED_AUDIO_HOSTS: 'cdn.example.com',
   GEMINI_API_KEY: FAKE_KEY, OPENAI_API_KEY: FAKE_OPENAI, OPENAI_MODELS: 'gpt-4.1-mini,gpt-4.1', OPENAI_MODEL: 'gpt-4.1-mini',
 });
@@ -39,6 +45,12 @@ beforeAll(async () => {
   close = () => srv.close();
 });
 afterAll(() => close());
+
+describe('health', () => {
+  it('answers on /api/health (Cloud Run) and /healthz without signing in', async () => {
+    for (const p of ['/api/health', '/healthz']) expect((await (await call(p, { auth: 'none' })).json()).ok).toBe(true);
+  });
+});
 
 describe('passcode gate', () => {
   it('refuses the API without a session', async () => {
@@ -211,5 +223,36 @@ describe('.env parser', () => {
   it('reads keys, quotes, comments and Windows line endings', async () => {
     const { parseEnv } = await import('../server/env');
     expect(parseEnv('﻿# c\r\nA=1\r\nB="two words"\r\nexport C=x # note\r\nD=\r\nE=\'s#q\'\r\n')).toEqual({ A: '1', B: 'two words', C: 'x', D: '', E: 's#q' });
+  });
+});
+
+describe('Firestore limits', () => {
+  let id = '';
+  it('stores a long episode edit compressed and gives it back intact', async () => {
+    const lines = Array.from({ length: 1500 }, (_, i) => ({ speaker: i % 2 ? 'KARAN' : 'SHWETA', text: `Line ${i}: ` + 'home loan EMI tenure savings '.repeat(12), t0: i * 2, t1: i * 2 + 1.8 }));
+    const big = doc({ scriptText: lines.map((l) => `${l.speaker}: ${l.text}`).join('\n'), lines });
+    expect(JSON.stringify(big).length).toBeGreaterThan(1_000_000); // would not fit in one Firestore document uncompressed
+    id = (await (await call('/api/projects', { method: 'POST', json: { name: 'Long ep', folderId: null, doc: big } })).json()).id;
+    const v = await call(`/api/projects/${id}/versions`, { method: 'POST', json: { doc: big, note: 'long' } });
+    expect(v.status).toBe(201);
+    const p = await (await call(`/api/projects/${id}`)).json();
+    expect(p.draft.lines.length).toBe(1500);
+    expect(p.draft.scriptText).toBe(big.scriptText);
+    const full = await (await call(`/api/versions/${encodeURIComponent(id + '_1')}`)).json();
+    expect(full.doc.lines[1499].text).toBe(lines[1499].text);
+  });
+  it('refuses data Firestore cannot hold, with a clear message instead of a server error', async () => {
+    const { assertStorable } = await import('../server/store');
+    expect(() => assertStorable({ grid: [[1, 2]] })).toThrow(/list inside a list/);
+    expect(() => assertStorable({ __name__: 1 })).toThrow(/field name/);
+    expect(() => assertStorable({ s: 'x'.repeat(1_100_000) })).toThrow(/too large/);
+    expect(() => assertStorable({ ok: [{ a: [1, 2] }], n: null })).not.toThrow();
+  });
+  it('keeps big pipeline subtitles compressed and returns them to the editor', async () => {
+    const srt = Array.from({ length: 2500 }, (_, i) => `${i + 1}\n00:${String(Math.floor(i / 60) % 60).padStart(2, '0')}:${String(i % 60).padStart(2, '0')},000 --> 00:00:01,000\nSubtitle line number ${i} about savings\n`).join('\n');
+    const r = await call('/api/pipeline/episodes', { method: 'POST', auth: 'pipeline', json: { title: 'Subs ep', script: 'A: hi', subtitles: srt } });
+    expect(r.status).toBe(201);
+    const p = await (await call(`/api/projects/${(await r.json()).projectId}`)).json();
+    expect(p.pipeline.subtitles).toBe(srt);
   });
 });

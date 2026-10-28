@@ -13,7 +13,10 @@
     "start": "node dist-server/server.js --production",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run",
-    "build:demo": "vite build --mode demo"
+    "build:demo": "vite build --mode demo",
+    "test:gcp": "node scripts/test-gcp.mjs",
+    "e2e:gcp": "node scripts/e2e-gcp.mjs",
+    "e2e:remote": "node test/e2e/gcp-e2e.mjs"
   },
   "dependencies": {
     "@breezystack/lamejs": "1.2.7",
@@ -31,6 +34,7 @@
     "zustand": "5.0.5"
   },
   "devDependencies": {
+    "@firestore-emulator/server": "^0.3.15",
     "@tailwindcss/vite": "4.1.10",
     "@types/express": "5.0.3",
     "@types/node": "22.15.30",

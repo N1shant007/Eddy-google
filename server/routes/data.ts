@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import type { Store } from '../store.js';
+import { MAX_PACKED, pack, unpack } from '../pack.js';
 
 /* Projects, folders, version history and the shared library. */
 
 const now = () => new Date().toISOString();
-const MAX_DOC = 900_000; // Firestore documents are capped at 1 MiB
 const str = (v: unknown, max = 200) => String(v ?? '').trim().slice(0, max);
 
 class HttpError extends Error { constructor(public status: number, msg: string) { super(msg); } }
@@ -13,8 +13,8 @@ const wrap = (fn: (req: Request<Record<string, string>>, res: Response) => Promi
 
 function docJson(doc: unknown) {
   if (!doc || typeof doc !== 'object') throw new HttpError(400, 'Missing edit data.');
-  const s = JSON.stringify(doc);
-  if (s.length > MAX_DOC) throw new HttpError(413, 'This edit is too large to save (over 900 KB). Remove unused cues or script text.');
+  const s = pack(JSON.stringify(doc));
+  if (s.length > MAX_PACKED) throw new HttpError(413, 'This edit is too large to save. Remove unused cues or script text.');
   return s;
 }
 const meta = (p: any) => ({
@@ -87,7 +87,7 @@ export function dataRoutes(db: Store) {
   r.get('/projects/:id', wrap(async (req, res) => {
     const p = await db.get('projects', req.params.id);
     if (!p) throw new HttpError(404, 'Project not found');
-    res.json({ ...meta(p), draft: JSON.parse(p.doc), pipeline: p.pipeline || null });
+    res.json({ ...meta(p), draft: JSON.parse(unpack(p.doc)), pipeline: p.pipeline ? { ...p.pipeline, subtitles: p.pipeline.subtitles ? unpack(p.pipeline.subtitles) : null } : null });
   }));
   r.patch('/projects/:id', wrap(async (req, res) => {
     const patch: Record<string, any> = { updatedAt: now() };
@@ -125,7 +125,7 @@ export function dataRoutes(db: Store) {
   r.get('/versions/:id', wrap(async (req, res) => {
     const v = await db.get('versions', req.params.id);
     if (!v) throw new HttpError(404, 'Version not found');
-    res.json({ ...vmeta(v), doc: JSON.parse(v.doc) });
+    res.json({ ...vmeta(v), doc: JSON.parse(unpack(v.doc)) });
   }));
 
   /* ---------- library ---------- */

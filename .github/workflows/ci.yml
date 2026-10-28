@@ -20,3 +20,20 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Google Cloud mode (Firestore + Cloud Storage emulators)
+        run: |
+          pip install gcp-storage-emulator
+          npm run test:gcp
+      - name: End to end in a browser (production build, emulators)
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
+          mkdir -p e2e-shots && SHOTS=e2e-shots npm run e2e:gcp
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e-shots

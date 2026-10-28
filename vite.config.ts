@@ -21,7 +21,8 @@ export default defineConfig((({ mode }: { mode: string }) => {
   resolve: { alias: { '@eddy/rules': fileURLToPath(new URL('./src/shared/rules/index.ts', import.meta.url)) } },
   build: {
     outDir: mode === 'demo' ? 'dist-demo' : 'dist',
-    sourcemap: true,
+    // no source maps on the live site (they would publish the source); kept for local and test builds
+    sourcemap: mode !== 'production',
     rollupOptions: { output: { manualChunks: { konva: ['konva', 'react-konva'], react: ['react', 'react-dom'] } } },
   },
   test: { environment: 'node' },

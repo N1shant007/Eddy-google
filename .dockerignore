@@ -8,3 +8,11 @@ dist-server
 test
 *.key.json
 service-account*.json
+.git
+.github
+dist-demo
+scripts/windows
+Setup Eddy (Windows).bat
+setup-log.txt
+setup-result.json
+*.md

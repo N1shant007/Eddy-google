@@ -57,13 +57,13 @@ See `.env.example`. Secrets (`EDDY_PASSCODE`, `SESSION_SECRET`, `PIPELINE_TOKEN`
 Keys and passcodes are only ever read by the server, from environment variables:
 
 - **Locally:** copy `.env.example` to `.env` and fill it in. `.env` is git-ignored and docker-ignored, so it is never committed or baked into the image. The server loads it at start-up.
-- **Cloud Run:** store each secret in Secret Manager and mount it as an environment variable:
+- **Cloud Run:** `scripts/deploy-gcp.sh` stores them in Secret Manager for you. By hand:
 
   ```bash
-  printf '%s' "<your Gemini API key>" | gcloud secrets create gemini-api-key --data-file=- --project=cobalt-mind-422108
-  printf '%s' "<your OpenAI API key>" | gcloud secrets create openai-api-key --data-file=- --project=cobalt-mind-422108
-  gcloud secrets add-iam-policy-binding gemini-api-key --member=serviceAccount:$SA --role=roles/secretmanager.secretAccessor
-  # deploy flag: --set-secrets=GEMINI_API_KEY=gemini-api-key:latest,OPENAI_API_KEY=openai-api-key:latest,EDDY_PASSCODE=eddy-passcode:latest,SESSION_SECRET=eddy-session-secret:latest
+  printf '%s' "<your Gemini API key>" | gcloud secrets create eddy-gemini-api-key --data-file=- --project=cobalt-mind-422108
+  printf '%s' "<your OpenAI API key>" | gcloud secrets create eddy-openai-api-key --data-file=- --project=cobalt-mind-422108
+  gcloud secrets add-iam-policy-binding eddy-gemini-api-key --member=serviceAccount:$SA --role=roles/secretmanager.secretAccessor
+  # deploy flag: --set-secrets=GEMINI_API_KEY=eddy-gemini-api-key:latest,OPENAI_API_KEY=eddy-openai-api-key:latest,EDDY_PASSCODE=eddy-passcode:latest,SESSION_SECRET=eddy-session-secret:latest
   ```
 
 Safeguards in this repo:
@@ -71,21 +71,51 @@ Safeguards in this repo:
 - The build refuses any `VITE_*KEY/SECRET/TOKEN` variable, because `VITE_*` values are published in the browser bundle.
 - CI fails if a `.env` file, a Google API key (`AIza…`), an OpenAI key (`sk-…`) or a private key is committed.
 
-## Google Cloud setup (one time)
+## Deploy to Google Cloud
+
+One script sets up everything and deploys: Firestore (Native mode), a private Cloud Storage bucket, a service account
+with only the roles Eddy needs, Secret Manager secrets, and a Cloud Run service built from this repo's `Dockerfile`.
+It is safe to run again (it creates only what is missing, then deploys a new revision).
+
+In [Cloud Shell](https://shell.cloud.google.com) (or any terminal where `gcloud` is signed in as a project Owner/Editor):
 
 ```bash
-PROJECT=cobalt-mind-422108
-SA=<cloud-run-service-account>@$PROJECT.iam.gserviceaccount.com
-gcloud storage buckets create gs://$PROJECT-eddy-audio --location=us-central1 --uniform-bucket-level-access
-gcloud storage buckets add-iam-policy-binding gs://$PROJECT-eddy-audio --member=serviceAccount:$SA --role=roles/storage.objectAdmin
-gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$SA --role=roles/datastore.user
-gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$SA --role=roles/aiplatform.user
+git clone -b v3 https://github.com/N1shant007/Eddy-google.git && cd Eddy-google
+PROJECT=cobalt-mind-422108 ./scripts/deploy-gcp.sh
 ```
 
-Firestore needs no custom indexes. The bucket stays private: audio is served
-through Eddy's API to signed-in users.
+It asks for the team passcode the first time. Optional settings go in front of the command, for example
+`GEMINI_API_KEY=… OPENAI_API_KEY=… ALLOWED_AUDIO_HOSTS=cdn.wondercraft.ai PUBLIC=no TRUST_PROXY_HOPS=2` (behind API Gateway).
+Without `GEMINI_API_KEY`, Gemini runs on Vertex AI with the service account, so no key is needed.
 
-Container: `docker build -t eddy .` (see `Dockerfile`; listens on `$PORT`, default 8080). Health check: `GET /healthz`.
+| What it creates | Name |
+|---|---|
+| Cloud Run service | `eddy` (us-central1, 1 GiB, scales 0–4) |
+| Firestore database | `(default)`, collections `eddy_folders`, `eddy_projects`, `eddy_versions`, `eddy_categories`, `eddy_assets`, `eddy_guidelines` |
+| Cloud Storage bucket | `<project>-eddy-audio` (private; unfinished uploads cleared after a day) |
+| Service account | `eddy-run@…` with Firestore user, Vertex AI user, and object admin on the bucket only |
+| Secrets | `eddy-passcode`, `eddy-session-secret`, `eddy-pipeline-token`, and `eddy-gemini-api-key` / `eddy-openai-api-key` if given |
+
+After deploying, check the live site end to end (it creates an "E2E test" folder, runs through everything, then deletes it):
+
+```bash
+BASE=<service URL> PASSCODE=$(gcloud secrets versions access latest --secret=eddy-passcode) \
+PIPELINE_TOKEN=$(gcloud secrets versions access latest --secret=eddy-pipeline-token) npm run e2e:remote
+```
+
+Firestore needs no custom indexes. The bucket stays private: audio is served through Eddy's API to signed-in users.
+Health check: `GET /api/health` (Cloud Run reserves `/healthz`).
+
+### Tested before deploying
+
+- `npm test`: rules engine and API (local storage).
+- `npm run test:gcp`: the same API tests against Firestore and Cloud Storage emulators (`pip install gcp-storage-emulator`).
+- `npm run build && npm run e2e:gcp`: the production build against the emulators in a real browser: sign in, starter
+  library, folders, a 26 MB episode uploaded in parts, auto-edit, versions, final mix, reload, pipeline hand-off, clean-up.
+
+Edits and pipeline subtitles are stored compressed, so a long episode fits within Firestore's 1 MiB document limit;
+the server also refuses data Firestore cannot hold (lists inside lists, oversize documents) with a clear message, in
+local mode too.
 
 **Request size:** Cloud Run and API Gateway refuse request bodies over 32 MB, so Eddy uploads audio in 8 MB parts
 (`/api/uploads`) and joins them in Cloud Storage. Downloads are streamed with HTTP range support.

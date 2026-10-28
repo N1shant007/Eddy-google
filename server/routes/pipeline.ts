@@ -6,6 +6,14 @@ import type { Store } from '../store.js';
 import { uploadToDrive } from '../drive.js';
 import { HttpError } from './data.js';
 import { requirePipeline } from '../auth.js';
+import { MAX_PACKED, MAX_PACKED_SUBS, pack } from '../pack.js';
+
+/** subtitles are kept compressed; refuse ones that would not fit in a Firestore document */
+function packSubs(text: string) {
+  const s = pack(text);
+  if (s.length > MAX_PACKED_SUBS) throw new HttpError(413, 'subtitles are too large to store (keep them under ~2 MB of text).');
+  return s;
+}
 
 /* Hand-off with the podcast pipeline.
    IN:  POST /api/pipeline/episodes          the pipeline sends the script + Wondercraft audio; Eddy creates a project
@@ -81,11 +89,13 @@ export function pipelineRoutes(db: Store, blobs: Blobs) {
     } else if (b.audioUrl) hash = await fetchAudio(blobs, String(b.audioUrl));
     const folderId = b.folder ? await folderFor(db, String(b.folder)) : null;
     const id = randomUUID();
-    const doc = emptyDoc(String(b.product || '').slice(0, 80), String(b.script || '').slice(0, 300_000), hash);
+    const doc = emptyDoc(String(b.product || '').slice(0, 80), String(b.script || '').slice(0, 1_000_000), hash);
+    const packed = pack(JSON.stringify(doc));
+    if (packed.length > MAX_PACKED) throw new HttpError(413, 'script is too large to store.');
     await db.set('projects', id, {
       folderId, name: title, product: doc.product, createdAt: now(), updatedAt: now(), updatedBy: 'Pipeline', headVersion: 0,
-      doc: JSON.stringify(doc),
-      pipeline: { externalId: b.externalId ? String(b.externalId).slice(0, 200) : null, subtitles: b.subtitles ? String(b.subtitles).slice(0, 500_000) : null, autoEditPending: b.autoEdit !== false, final: null },
+      doc: packed,
+      pipeline: { externalId: b.externalId ? String(b.externalId).slice(0, 200) : null, subtitles: b.subtitles ? packSubs(String(b.subtitles)) : null, autoEditPending: b.autoEdit !== false, final: null },
     });
     res.status(201).json({ projectId: id, editorPath: `/#/p/${id}`, audioHash: hash });
   }));

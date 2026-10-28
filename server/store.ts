@@ -19,6 +19,25 @@ export interface Store {
   addVersion(projectId: string, build: (n: number) => Record<string, any>, projectPatch: Record<string, any>): Promise<number>;
 }
 
+/** Firestore's own limits, checked in both stores so local testing catches what production would refuse:
+    documents up to 1 MiB, no arrays directly inside arrays, no undefined values. */
+export function assertStorable(data: unknown) {
+  const walk = (v: unknown, inArray: boolean, path: string): void => {
+    if (v === undefined) throw Object.assign(new Error(`Cannot store an empty value at ${path}`), { status: 400 });
+    if (Array.isArray(v)) {
+      if (inArray) throw Object.assign(new Error(`Cannot store a list inside a list at ${path}`), { status: 400 });
+      v.forEach((x, i) => walk(x, true, `${path}[${i}]`));
+    } else if (v && typeof v === 'object') {
+      for (const [k, x] of Object.entries(v)) {
+        if (!k || /^__.*__$/.test(k)) throw Object.assign(new Error(`Cannot store the field name "${k}"`), { status: 400 });
+        if (x !== undefined) walk(x, false, path ? `${path}.${k}` : k);
+      }
+    }
+  };
+  walk(data, false, '');
+  if (Buffer.byteLength(JSON.stringify(data)) > 1_000_000) throw Object.assign(new Error('This item is too large to store (over 1 MB).'), { status: 413 });
+}
+
 /* ---------------- Firestore ---------------- */
 class FirestoreStore implements Store {
   private db = new Firestore({ projectId: config.project || undefined, databaseId: config.firestoreDatabase, ignoreUndefinedProperties: true });
@@ -37,9 +56,11 @@ class FirestoreStore implements Store {
   }
   async set(col: Col, id: string, data: Record<string, any>) {
     const { id: _i, ...rest } = data;
+    assertStorable(rest);
     await this.c(col).doc(id).set(rest);
   }
   async update(col: Col, id: string, patch: Record<string, any>) {
+    assertStorable(patch);
     try { await this.c(col).doc(id).update(patch); return true; }
     catch (e: any) { if (e?.code === 5) return false; throw e; } // 5 = NOT_FOUND
   }
@@ -50,6 +71,7 @@ class FirestoreStore implements Store {
       const p = await tx.get(pref);
       if (!p.exists) throw Object.assign(new Error('Project not found'), { status: 404 });
       const n = (p.data()!.headVersion || 0) + 1;
+      assertStorable(build(n));
       tx.set(this.c('versions').doc(`${projectId}_${n}`), build(n));
       tx.update(pref, { ...projectPatch, headVersion: n });
       return n;
@@ -96,7 +118,12 @@ class LocalStore implements Store {
     return d ? structuredClone(d) : null;
   }
   set(col: Col, id: string, data: Record<string, any>) {
-    return this.serial(async () => { (await this.load(col)).set(id, { ...structuredClone(data), id }); await this.save(col); });
+    return this.serial(async () => {
+      const { id: _i, ...rest } = data;
+      assertStorable(rest);
+      (await this.load(col)).set(id, { ...structuredClone(rest), id });
+      await this.save(col);
+    });
   }
   update(col: Col, id: string, patch: Record<string, any>) {
     return this.serial(async () => {
@@ -110,6 +137,8 @@ class LocalStore implements Store {
         for (const kk of ks.slice(0, -1)) o = (o[kk] = o[kk] && typeof o[kk] === 'object' ? o[kk] : {});
         o[ks[ks.length - 1]] = v;
       }
+      const { id: _i, ...rest } = next;
+      assertStorable(rest);
       m.set(id, { ...next, id } as Doc);
       await this.save(col);
       return true;
@@ -123,6 +152,8 @@ class LocalStore implements Store {
       const pm = await this.load('projects'), p = pm.get(projectId);
       if (!p) throw Object.assign(new Error('Project not found'), { status: 404 });
       const n = (p.headVersion || 0) + 1;
+      const { id: _i, ...head } = { ...p, ...projectPatch, headVersion: n };
+      assertStorable(build(n)); assertStorable(head);
       (await this.load('versions')).set(`${projectId}_${n}`, { ...build(n), id: `${projectId}_${n}` });
       pm.set(projectId, { ...p, ...projectPatch, headVersion: n });
       await this.save('versions');

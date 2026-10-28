@@ -56,7 +56,7 @@ try {
   $up = $false
   for ($i = 0; $i -lt 30 -and -not $up; $i++) {
     Start-Sleep -Seconds 1
-    try { $h = Invoke-RestMethod -Uri 'http://localhost:8080/healthz' -TimeoutSec 2; $up = $h.ok } catch { }
+    try { $h = Invoke-RestMethod -Uri 'http://localhost:8080/api/health' -TimeoutSec 2; $up = $h.ok } catch { }
   }
   $result.server = if ($up) { 'running on http://localhost:8080' } else { 'did not answer within 30 s' }
   $result.ok = $up -and $result.tests -eq 'passed'

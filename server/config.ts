@@ -7,6 +7,8 @@ export const config = {
   /** 'local' keeps data and audio in ./.data (development without Google Cloud) */
   storage: (env.EDDY_STORAGE || (env.EDDY_BUCKET ? 'gcp' : 'local')) as 'gcp' | 'local',
   dataDir: env.EDDY_DATA_DIR || '.data',
+  /** proxies in front of the app that add X-Forwarded-For: 1 on Cloud Run, 2 behind API Gateway */
+  trustProxyHops: Number(env.TRUST_PROXY_HOPS || 1),
 
   passcode: env.EDDY_PASSCODE || '',
   sessionSecret: env.SESSION_SECRET || '',
