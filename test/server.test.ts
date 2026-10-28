@@ -206,3 +206,10 @@ describe('pipeline hand-off', () => {
     expect(Buffer.from(await f.arrayBuffer()).equals(mix)).toBe(true);
   });
 });
+
+describe('.env parser', () => {
+  it('reads keys, quotes, comments and Windows line endings', async () => {
+    const { parseEnv } = await import('../server/env');
+    expect(parseEnv('﻿# c\r\nA=1\r\nB="two words"\r\nexport C=x # note\r\nD=\r\nE=\'s#q\'\r\n')).toEqual({ A: '1', B: 'two words', C: 'x', D: '', E: 's#q' });
+  });
+});
