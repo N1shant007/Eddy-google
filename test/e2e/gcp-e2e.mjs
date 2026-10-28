@@ -60,6 +60,12 @@ const pipe = async (p, init = {}) => { const r = await fetch(BASE + p, { ...init
 const shot = (n) => page.screenshot({ path: `${SHOTS}/${n}.png` });
 
 try {
+  /* 0. health and static files */
+  const h = await fetch(`${BASE}/api/health`).then((r) => r.json());
+  if (!h.ok) fail('health check failed');
+  for (const p of ['/assets/missing.js', '/assets/index.js.map']) if ((await fetch(BASE + p)).status !== 404) fail(`${p} should be 404`);
+  log(`health ok (storage: ${h.storage}, AI: ${h.ai ? 'on' : 'off'}); missing files and source maps return 404`);
+
   /* 1. sign in */
   await page.goto(BASE);
   await page.fill('#si-pass', 'wrong');

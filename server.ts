@@ -51,7 +51,11 @@ async function main() {
   if (config.production) {
     const dist = path.join(root, 'dist');
     app.use(express.static(dist, { index: false, maxAge: '1y', setHeaders: (res, p) => { if (p.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache'); } }));
-    app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
+    // a missing file (anything with an extension, e.g. an old /assets/*.js) is a 404, not the app page
+    app.get(/^(?!\/api\/).*/, (req, res) => {
+      if (/\.[a-z0-9]+$/i.test(req.path)) return void res.status(404).type('text').send('Not found');
+      res.sendFile(path.join(dist, 'index.html'));
+    });
   } else {
     const { createServer } = await import('vite');
     const vite = await createServer({ root, server: { middlewareMode: true }, appType: 'spa' });
