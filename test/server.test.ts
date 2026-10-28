@@ -7,12 +7,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /* API tests against the real Express app with local storage (no Google Cloud needed). */
 
+const FAKE_KEY = 'AIza' + 'Sy' + 'X'.repeat(33);
 const dir = mkdtempSync(path.join(tmpdir(), 'eddy-test-'));
 Object.assign(process.env, {
   EDDY_STORAGE: 'local', EDDY_DATA_DIR: dir, EDDY_PASSCODE: 'open-sesame', SESSION_SECRET: 'x'.repeat(40),
   PIPELINE_TOKEN: 'pipe-token-123', GOOGLE_CLOUD_PROJECT: 'test-project', ALLOWED_AUDIO_HOSTS: 'cdn.example.com',
+  GEMINI_API_KEY: FAKE_KEY,
 });
 
+let aiMod: any;
 let base = '', cookie = '', close: () => void = () => {};
 const call = (p: string, init: RequestInit & { json?: unknown; auth?: 'cookie' | 'pipeline' | 'none' } = {}) => {
   const { json, auth = 'cookie', ...rest } = init;
@@ -27,6 +30,7 @@ const doc = (extra: Record<string, unknown> = {}) => ({ schema: 2, product: '', 
 beforeAll(async () => {
   const { createApi } = await import('../server');
   const ai = await import('../server/routes/ai');
+  aiMod = ai;
   ai.setGenerate(async (p) => JSON.stringify({ echo: p.length }));
   const srv = createApi().listen(0);
   await new Promise((r) => srv.once('listening', r));
@@ -121,8 +125,25 @@ describe('audio storage', () => {
 
 describe('Gemini', () => {
   it('reports the model and answers team members', async () => {
-    expect(await (await call('/api/ai')).json()).toEqual({ provider: 'gemini', model: 'gemini-2.5-flash' });
+    expect(await (await call('/api/ai')).json()).toEqual({ provider: 'gemini', model: 'gemini-2.5-flash', mode: 'Vertex AI (API key)' });
     expect(await (await call('/api/ai', { method: 'POST', json: { prompt: 'hello' } })).json()).toEqual({ text: '{"echo":5}' });
+  });
+});
+
+describe('API key stays secret', () => {
+  it('is never in API responses, even when Gemini fails with it in the message', async () => {
+    const info = await (await call('/api/ai')).text();
+    expect(info).not.toContain(FAKE_KEY);
+    aiMod.setGenerate(async () => { throw new Error(`request with key=${FAKE_KEY} was rejected`); });
+    const r = await call('/api/ai', { method: 'POST', json: { prompt: 'x' } });
+    const body = await r.text();
+    expect(r.status).toBe(502);
+    expect(body).not.toContain(FAKE_KEY);
+    expect(body).toContain('[key]');
+    aiMod.setGenerate(async (p: string) => JSON.stringify({ echo: p.length }));
+  });
+  it('is refused without a signed-in session', async () => {
+    expect((await call('/api/ai', { method: 'POST', json: { prompt: 'x' }, auth: 'none' })).status).toBe(401);
   });
 });
 

@@ -3,5 +3,9 @@ dist
 dist-server
 .data
 .env
-.env.local
+.env.*
+!.env.example
+!.env.demo
+*.key.json
+service-account*.json
 dist-demo

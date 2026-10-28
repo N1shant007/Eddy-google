@@ -19,6 +19,10 @@ export const config = {
   prefix: env.FIRESTORE_PREFIX ?? 'eddy_',
 
   geminiModel: env.GEMINI_MODEL || 'gemini-2.5-flash',
+  /** optional API key (secret). Without it, Vertex AI uses the Cloud Run service account. */
+  geminiApiKey: env.GEMINI_API_KEY || env.GOOGLE_API_KEY || '',
+  /** 'vertex' (default; with a key this is Vertex AI express mode) or 'gemini-api' (Google AI Studio key) */
+  geminiBackend: (env.GEMINI_BACKEND === 'gemini-api' ? 'gemini-api' : 'vertex') as 'vertex' | 'gemini-api',
   aiDailyLimit: Number(env.AI_DAILY_LIMIT || 60),
   aiEnabled: env.EDDY_AI !== 'off',
 
@@ -31,6 +35,7 @@ export function checkConfig(): string[] {
   const problems: string[] = [];
   if (!config.passcode) problems.push('EDDY_PASSCODE is not set: nobody can sign in.');
   if (!config.sessionSecret || config.sessionSecret.length < 24) problems.push('SESSION_SECRET must be set to a random string of at least 24 characters.');
+  if (config.geminiBackend === 'gemini-api' && !config.geminiApiKey) problems.push('GEMINI_BACKEND=gemini-api needs GEMINI_API_KEY.');
   if (config.storage === 'gcp' && !config.bucket) problems.push('EDDY_BUCKET is required when EDDY_STORAGE=gcp.');
   return problems;
 }

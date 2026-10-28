@@ -7,6 +7,7 @@
  *   /api/pipeline/*, /api/projects/:id/final                                 hand-off with the pipeline
  * Everything else serves the React app (Vite middleware in development, ./dist in production).
  */
+import './server/env.js'; // first: loads .env before config is read
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -16,7 +17,7 @@ import { makeStore, type Store } from './server/store.js';
 import { makeBlobs, type Blobs } from './server/blobs.js';
 import { dataRoutes, errorHandler } from './server/routes/data.js';
 import { audioRoutes } from './server/routes/audio.js';
-import { aiRoutes, aiReady } from './server/routes/ai.js';
+import { aiMode, aiRoutes, aiReady } from './server/routes/ai.js';
 import { pipelineRoutes } from './server/routes/pipeline.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -53,7 +54,7 @@ async function main() {
     const vite = await createServer({ root, server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   }
-  app.listen(config.port, () => console.log(`[eddy] listening on :${config.port} (${config.production ? 'production' : 'development'}, storage: ${config.storage}, AI: ${aiReady() ? config.geminiModel : 'off'})`));
+  app.listen(config.port, () => console.log(`[eddy] listening on :${config.port} (${config.production ? 'production' : 'development'}, storage: ${config.storage}, AI: ${aiReady() ? `${config.geminiModel} via ${aiMode()}` : 'off'})`));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main();

@@ -6,3 +6,5 @@ dist-server
 .env.*
 !.env.example
 test
+*.key.json
+service-account*.json
