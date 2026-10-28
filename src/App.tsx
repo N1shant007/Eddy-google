@@ -11,7 +11,7 @@ import { GuidelinesView } from './library/GuidelinesView';
 const NAV: [View, string][] = [['projects', 'Projects'], ['editor', 'Editor'], ['library', 'Audio library'], ['guidelines', 'Guidelines']];
 
 export function App() {
-  const { ready, user, view, setView, init, be, toasts, openProjectId } = useApp();
+  const { ready, user, view, setView, init, be, toasts, openProjectId, libraryImport } = useApp();
   useEffect(() => {
     setSignedOutHandler(() => useApp.setState({ user: null }));
     init();
@@ -41,6 +41,7 @@ export function App() {
       {view === 'guidelines' && <GuidelinesView />}
       <DialogHost />
       <MenuHost />
+      {libraryImport && <div className="libimport" role="status"><span className="spin" />{libraryImport}</div>}
       <div className="toasts" aria-live="polite">{toasts.map((t) => <div key={t.id} className={'toast ' + (t.kind || '')}>{t.text}</div>)}</div>
     </div>
   );

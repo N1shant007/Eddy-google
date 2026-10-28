@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Asset, Category, Guideline } from '@eddy/rules';
 import { makeBackend } from '../data/backend';
+import { importStarterLibrary } from '../data/seed';
 import type { EddyBackend } from '../data/backend';
 import type { Folder, ProjectMeta, UserInfo } from '../data/types';
 
@@ -24,6 +25,9 @@ interface AppState {
 
   init(): Promise<void>;
   signedIn(user: UserInfo): Promise<void>;
+  /** first run: an empty library gets the Bajaj starter library (24 sounds, categories, guidelines) */
+  ensureLibrary(): Promise<void>;
+  libraryImport: string | null;
   setView(v: View): void;
   refresh(): Promise<void>;
   refreshLibrary(): Promise<void>;
@@ -47,10 +51,12 @@ export const useApp = create<AppState>((set, get) => ({
   assets: [],
   guidelines: [],
   toasts: [],
+  libraryImport: null,
 
   async signedIn(user) {
     set({ user });
     await Promise.all([get().refresh(), get().refreshLibrary()]);
+    void get().ensureLibrary();
     // a link straight to a project (#/p/<id>, e.g. from the pipeline) opens it after sign-in
     const m = location.hash.match(/^#\/p\/(.+)$/);
     if (m) set({ openProjectId: m[1], view: 'editor' });
@@ -58,11 +64,23 @@ export const useApp = create<AppState>((set, get) => ({
   async init() {
     const user = await get().be.user();
     set({ user });
-    if (user) await Promise.all([get().refresh(), get().refreshLibrary()]);
+    if (user) { await Promise.all([get().refresh(), get().refreshLibrary()]); void get().ensureLibrary(); }
     // deep link: #/p/<id>
     const m = location.hash.match(/^#\/p\/(.+)$/);
     if (user && m) set({ openProjectId: m[1], view: 'editor' });
     set({ ready: true });
+  },
+  async ensureLibrary() {
+    const { assets, categories, be, libraryImport } = get();
+    if (libraryImport || assets.length || categories.length) return;
+    set({ libraryImport: 'Importing the audio library…' });
+    try {
+      await importStarterLibrary(be, (d, t, name) => set({ libraryImport: name ? `Importing the audio library: ${name} (${d + 1}/${t})` : null }));
+      await get().refreshLibrary();
+      get().toast(`Audio library imported: ${get().assets.length} sounds and the storytelling guidelines`, 'ok', 5000);
+    } catch (e: any) {
+      get().toast(`The audio library could not be imported: ${e?.message || e}. Try Audio library → Import starter library.`, 'error', 8000);
+    } finally { set({ libraryImport: null }); }
   },
   setView(view) {
     set({ view });
