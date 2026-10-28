@@ -8,11 +8,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 /* API tests against the real Express app with local storage (no Google Cloud needed). */
 
 const FAKE_KEY = 'AIza' + 'Sy' + 'X'.repeat(33);
+const FAKE_OPENAI = 'sk-' + 'proj-' + 'Y'.repeat(40);
 const dir = mkdtempSync(path.join(tmpdir(), 'eddy-test-'));
 Object.assign(process.env, {
   EDDY_STORAGE: 'local', EDDY_DATA_DIR: dir, EDDY_PASSCODE: 'open-sesame', SESSION_SECRET: 'x'.repeat(40),
   PIPELINE_TOKEN: 'pipe-token-123', GOOGLE_CLOUD_PROJECT: 'test-project', ALLOWED_AUDIO_HOSTS: 'cdn.example.com',
-  GEMINI_API_KEY: FAKE_KEY,
+  GEMINI_API_KEY: FAKE_KEY, OPENAI_API_KEY: FAKE_OPENAI, OPENAI_MODELS: 'gpt-4.1-mini,gpt-4.1', OPENAI_MODEL: 'gpt-4.1-mini',
 });
 
 let aiMod: any;
@@ -31,7 +32,7 @@ beforeAll(async () => {
   const { createApi } = await import('../server');
   const ai = await import('../server/routes/ai');
   aiMod = ai;
-  ai.setGenerate(async (p) => JSON.stringify({ echo: p.length }));
+  ai.setGenerate(async (prov, model, p) => JSON.stringify({ prov, model, echo: p.length }));
   const srv = createApi().listen(0);
   await new Promise((r) => srv.once('listening', r));
   base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
@@ -123,10 +124,26 @@ describe('audio storage', () => {
   });
 });
 
-describe('Gemini', () => {
-  it('reports the model and answers team members', async () => {
-    expect(await (await call('/api/ai')).json()).toEqual({ provider: 'gemini', model: 'gemini-2.5-flash', mode: 'Vertex AI (API key)' });
-    expect(await (await call('/api/ai', { method: 'POST', json: { prompt: 'hello' } })).json()).toEqual({ text: '{"echo":5}' });
+describe('AI providers (Gemini and ChatGPT)', () => {
+  it('lists each configured provider with its models, never the keys', async () => {
+    const r = await (await call('/api/ai')).json();
+    expect(r.providers.map((p: any) => [p.id, p.defaultModel, p.models])).toEqual([
+      ['gemini', 'gemini-2.5-flash', ['gemini-2.5-flash', 'gemini-2.5-pro']],
+      ['openai', 'gpt-4.1-mini', ['gpt-4.1-mini', 'gpt-4.1']],
+    ]);
+    const raw = JSON.stringify(r);
+    expect(raw).not.toContain(FAKE_KEY);
+    expect(raw).not.toContain(FAKE_OPENAI);
+  });
+  it('sends the prompt to the chosen provider and model', async () => {
+    const g = await (await call('/api/ai', { method: 'POST', json: { prompt: 'hello' } })).json();
+    expect(JSON.parse(g.text)).toEqual({ prov: 'gemini', model: 'gemini-2.5-flash', echo: 5 });
+    const o = await (await call('/api/ai', { method: 'POST', json: { prompt: 'hello', provider: 'openai', model: 'gpt-4.1' } })).json();
+    expect(JSON.parse(o.text)).toEqual({ prov: 'openai', model: 'gpt-4.1', echo: 5 });
+  });
+  it('refuses a model the server has not enabled', async () => {
+    const r = await call('/api/ai', { method: 'POST', json: { prompt: 'x', provider: 'openai', model: 'some-other-model' } });
+    expect(r.status).toBe(400);
   });
 });
 
@@ -134,13 +151,16 @@ describe('API key stays secret', () => {
   it('is never in API responses, even when Gemini fails with it in the message', async () => {
     const info = await (await call('/api/ai')).text();
     expect(info).not.toContain(FAKE_KEY);
-    aiMod.setGenerate(async () => { throw new Error(`request with key=${FAKE_KEY} was rejected`); });
-    const r = await call('/api/ai', { method: 'POST', json: { prompt: 'x' } });
-    const body = await r.text();
-    expect(r.status).toBe(502);
-    expect(body).not.toContain(FAKE_KEY);
-    expect(body).toContain('[key]');
-    aiMod.setGenerate(async (p: string) => JSON.stringify({ echo: p.length }));
+    aiMod.setGenerate(async () => { throw new Error(`request with key=${FAKE_KEY} / ${FAKE_OPENAI} was rejected`); });
+    for (const provider of ['gemini', 'openai']) {
+      const r = await call('/api/ai', { method: 'POST', json: { prompt: 'x', provider } });
+      const body = await r.text();
+      expect(r.status).toBe(502);
+      expect(body).not.toContain(FAKE_KEY);
+      expect(body).not.toContain(FAKE_OPENAI);
+      expect(body).toContain('[key]');
+    }
+    aiMod.setGenerate(async (prov: string, model: string, p: string) => JSON.stringify({ prov, model, echo: p.length }));
   });
   it('is refused without a signed-in session', async () => {
     expect((await call('/api/ai', { method: 'POST', json: { prompt: 'x' }, auth: 'none' })).status).toBe(401);

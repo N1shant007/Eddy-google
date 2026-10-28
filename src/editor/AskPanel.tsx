@@ -3,7 +3,8 @@ import { applyOps, isEditBlock, opsPrompt, parseEditBlock, parseJsonLoose, place
 import { useApp } from '../state/app';
 import { useEditor } from '../state/editor';
 import { loadAll } from '../audio/engine';
-import { askTeamAI, PROVIDER_NAME, teamAI } from '../data/ai';
+import { askAI, useAi } from '../data/ai';
+import { AiPicker } from './AiPicker';
 import { copyPasteAI } from '../ui/copyPaste';
 import { activeGuidelineText } from './AutoEditPanel';
 
@@ -21,8 +22,8 @@ export function AskPanel() {
   const [chat, setChat] = useState<Msg[]>([]);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  const [ai, setAi] = useState<{ provider: string; model: string } | null>(null);
-  useEffect(() => { teamAI().then(setAi); }, []);
+  const { list: aiList, choice, label: aiLabel } = useAi();
+  const ai = aiList && aiList.length ? choice : null;
   const push = (m: Msg) => setChat((c) => [...c, m]);
   const block = isEditBlock(text);
 
@@ -57,7 +58,7 @@ export function AskPanel() {
     setBusy(true);
     try {
       const prompt = opsPrompt(s.doc, req, assets, categories, activeGuidelineText(), s.playhead, s.sel);
-      const reply = ai ? await askTeamAI(prompt) : await copyPasteAI(prompt, 'Edit');
+      const reply = ai ? await askAI(prompt, ai) : await copyPasteAI(prompt, 'Edit');
       if (reply == null) { push({ role: 'e', text: 'Cancelled.' }); return; }
       const j = parseJsonLoose(reply);
       if (!j || !Array.isArray(j.ops)) { push({ role: 'e', text: 'The reply had no edit operations. Try rephrasing.' }); return; }
@@ -72,9 +73,10 @@ export function AskPanel() {
   return (
     <div className="insp">
       <p className="hint" style={{ marginTop: 0 }}>
-        Describe a change in plain words and {ai ? `${PROVIDER_NAME[ai.provider] || 'the team AI'}` : 'Claude (copy-paste)'} turns it into edits.
+        Describe a change in plain words and {ai ? aiLabel : 'Claude (copy-paste)'} turns it into edits.
         Or paste exact instructions starting with <b>EDDY EDIT</b>: they apply straight away, with no AI.
       </p>
+      {ai && <AiPicker />}
       <div className="chat">{chat.map((m, i) => <div key={i} className={'msg ' + m.role}>{m.text}</div>)}</div>
       {chat.length === 0 && (
         <div className="acts" style={{ marginBottom: 10 }}>

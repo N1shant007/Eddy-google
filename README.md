@@ -10,7 +10,7 @@ It is Eddy v2 rebuilt for the pipeline's stack and Google Cloud. A browser-only 
 | Frontend | React 19 + Vite 6 + Tailwind 4, TypeScript; Konva timeline, Zustand, Web Audio, lamejs, JSZip |
 | Data | Firestore (collections prefixed `eddy_`) |
 | Audio | Cloud Storage bucket (`audio/<sha256>`, `exports/<project>/…`) |
-| AI | Gemini via `@google/genai`: Vertex AI with the service account, or an API key kept server-side |
+| AI | Gemini via `@google/genai` (Vertex AI or API key) and ChatGPT (OpenAI API); keys kept server-side; provider and model picked in the editor |
 | Sign-in | Team passcode gate (`EDDY_PASSCODE`), signed session cookie |
 | Hosting | One container on Cloud Run (us-central1), behind API Gateway |
 
@@ -38,7 +38,9 @@ See `.env.example`. Secrets (`EDDY_PASSCODE`, `SESSION_SECRET`, `PIPELINE_TOKEN`
 | `GOOGLE_CLOUD_LOCATION` | no | Vertex AI region, default `us-central1` |
 | `GEMINI_API_KEY` | no (secret) | Gemini API key. Empty = Vertex AI with the service account. Set = Vertex AI express mode |
 | `GEMINI_BACKEND` | no | `vertex` (default) or `gemini-api` for a Google AI Studio key |
-| `GEMINI_MODEL` | no | Default `gemini-2.5-flash`; use the model the pipeline already uses |
+| `GEMINI_MODEL` / `GEMINI_MODELS` | no | Default model, and the list people can pick (default `gemini-2.5-flash,gemini-2.5-pro`) |
+| `OPENAI_API_KEY` | no (secret) | Turns on ChatGPT |
+| `OPENAI_MODEL` / `OPENAI_MODELS` | no | Default model (`gpt-4.1-mini`), and an optional fixed list; empty = the chat models the key can use |
 | `FIRESTORE_DATABASE` / `FIRESTORE_PREFIX` | no | Default `(default)` / `eddy_` |
 | `PIPELINE_TOKEN` | for hand-off | Bearer token the pipeline uses for `/api/pipeline/*`; also signs callbacks |
 | `ALLOWED_AUDIO_HOSTS` | for audio URLs | Hosts the pipeline may send `audioUrl` from (Wondercraft's file host) |
@@ -55,14 +57,15 @@ Keys and passcodes are only ever read by the server, from environment variables:
 
   ```bash
   printf '%s' "<your Gemini API key>" | gcloud secrets create gemini-api-key --data-file=- --project=cobalt-mind-422108
+  printf '%s' "<your OpenAI API key>" | gcloud secrets create openai-api-key --data-file=- --project=cobalt-mind-422108
   gcloud secrets add-iam-policy-binding gemini-api-key --member=serviceAccount:$SA --role=roles/secretmanager.secretAccessor
-  # deploy flag: --set-secrets=GEMINI_API_KEY=gemini-api-key:latest,EDDY_PASSCODE=eddy-passcode:latest,SESSION_SECRET=eddy-session-secret:latest
+  # deploy flag: --set-secrets=GEMINI_API_KEY=gemini-api-key:latest,OPENAI_API_KEY=openai-api-key:latest,EDDY_PASSCODE=eddy-passcode:latest,SESSION_SECRET=eddy-session-secret:latest
   ```
 
 Safeguards in this repo:
 - The browser never receives the key. `GET /api/ai` reports only the model and mode, and errors are scrubbed of the key.
 - The build refuses any `VITE_*KEY/SECRET/TOKEN` variable, because `VITE_*` values are published in the browser bundle.
-- CI fails if a `.env` file, a Google API key (`AIza…`) or a private key is committed.
+- CI fails if a `.env` file, a Google API key (`AIza…`), an OpenAI key (`sk-…`) or a private key is committed.
 
 ## Google Cloud setup (one time)
 
@@ -124,7 +127,7 @@ Container: `docker build -t eddy .` (see `Dockerfile`; listens on `$PORT`, defau
 - Version history: autosave, Save version with a note, compare, restore (as a new version), copy a version as a new project.
 - Timeline editor: move, trim, split, duplicate, delete, clip volume and fades, track mute/solo/volume, music dips under voices,
   undo/redo, playback speed 0.5×–2× with natural pitch, play from the beginning, MP3 export.
-- Auto-edit: Bajaj storytelling rules (story play / story rewrite, Unfolding Insights, coin chime, warm keys, harp glide,
+- Auto-edit: pick Rules, AI (Gemini or ChatGPT, then the model) or Copy-paste before running; Bajaj storytelling rules (story play / story rewrite, Unfolding Insights, coin chime, warm keys, harp glide,
   2.5 s intro, intro music under the CTA, one music at a time at −10 dB, disclaimers), Gemini, or copy-paste with Claude.
 - Ask AI: plain-words edits through Gemini, or exact `EDDY EDIT` instructions.
 - Audio library with categories and the Bajaj starter library; guidelines editor.

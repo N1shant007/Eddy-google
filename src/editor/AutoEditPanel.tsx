@@ -3,7 +3,8 @@ import {
   alignLines, applyTimings, autoEdit, autoEditPrompt, finishEdit, linesFromBlocks, normCues, parseAlignJson, parseJsonLoose,
   parseScript, parseSubs, placeCues, prepareLines, type AutoEditReport, type Cue,
 } from '@eddy/rules';
-import { askTeamAI, PROVIDER_NAME, teamAI } from '../data/ai';
+import { askAI, useAi } from '../data/ai';
+import { AiPicker } from './AiPicker';
 import { copyPasteAI } from '../ui/copyPaste';
 import { useApp } from '../state/app';
 import { useEditor } from '../state/editor';
@@ -56,11 +57,11 @@ export function AutoEditPanel() {
   const [busy, setBusy] = useState(false);
   const [showCues, setShowCues] = useState(false);
   const [engine, setEngineS] = useState<Engine>(() => (localStorage.getItem('eddy.engine') as Engine) || 'rules');
-  const [ai, setAi] = useState<{ provider: string; model: string } | null>(null);
-  useEffect(() => { teamAI().then(setAi); }, []);
+  const { list: aiList, choice: aiChoice, provider: aiProv, label: aiLabel } = useAi();
+  const ai = aiList && aiList.length ? aiChoice : null;
   const setEngine = (e: Engine) => { setEngineS(e); try { localStorage.setItem('eddy.engine', e); } catch { /* ignore */ } };
   const eff: Engine = engine === 'team' && !ai ? 'rules' : engine;
-  const aiName = ai ? PROVIDER_NAME[ai.provider] || ai.provider : 'AI';
+  const aiName = aiProv?.name || 'AI';
   const scriptFile = useRef<HTMLInputElement>(null), subsFile = useRef<HTMLInputElement>(null);
   const products = useMemo(() => [...new Set([...DEFAULT_PRODUCTS, ...assets.filter((a) => a.role === 'pdisclaimer' && a.product).map((a) => a.product!)])], [assets]);
   const parsedCount = useMemo(() => parseScript(doc.scriptText || '').lines.length, [doc.scriptText]);
@@ -87,7 +88,7 @@ export function AutoEditPanel() {
         const p = prepareLines(work, c);
         if (p.audioOnly) throw new Error('Add the script or subtitles first: the AI needs the words.');
         const prompt = autoEditPrompt(work, assets, categories, activeGuidelineText());
-        const text = eff === 'team' ? await askTeamAI(prompt) : await copyPasteAI(prompt, 'Auto-edit');
+        const text = eff === 'team' ? await askAI(prompt, ai!) : await copyPasteAI(prompt, 'Auto-edit');
         if (text == null) return;
         const cues = normCues(parseJsonLoose(text), work.lines.length, assets);
         if (!cues.length) throw new Error('No cues found in the reply. Paste the JSON exactly as the AI returned it.');
@@ -97,7 +98,7 @@ export function AutoEditPanel() {
       }
       await loadAll(useEditor.getState().doc.clips.map((x) => x.assetHash));
       setReport(rep);
-      toast(`${eff === 'rules' ? 'Auto-edit' : eff === 'team' ? aiName : 'Claude'} placed ${rep.placed} sounds`, 'ok');
+      toast(`${eff === 'rules' ? 'Auto-edit' : eff === 'team' ? aiLabel : 'Claude'} placed ${rep.placed} sounds`, 'ok');
     } catch (e: any) { toast(e?.message || String(e), 'error', 7000); }
     finally { setBusy(false); }
   };
@@ -171,16 +172,17 @@ export function AutoEditPanel() {
       <div className="field"><label>Who edits</label></div>
       <div className="seg" role="radiogroup" aria-label="Who edits">
         <button role="radio" aria-checked={eff === 'rules'} className={eff === 'rules' ? 'on' : ''} onClick={() => setEngine('rules')}>Rules (instant)</button>
-        <button role="radio" aria-checked={eff === 'team'} className={eff === 'team' ? 'on' : ''} disabled={!ai} title={ai ? `${aiName} (${ai.model})` : 'Gemini is not set up on the server (GOOGLE_CLOUD_PROJECT)'} onClick={() => setEngine('team')}>{ai ? aiName : 'Gemini (not set up)'}</button>
+        <button role="radio" aria-checked={eff === 'team'} className={eff === 'team' ? 'on' : ''} disabled={!ai} title={ai ? aiLabel : 'No AI is set up on the server (GEMINI_API_KEY or OPENAI_API_KEY)'} onClick={() => setEngine('team')}>{ai ? 'AI (Gemini / ChatGPT)' : 'AI (not set up)'}</button>
         <button role="radio" aria-checked={eff === 'paste'} className={eff === 'paste' ? 'on' : ''} onClick={() => setEngine('paste')}>Copy-paste Claude</button>
       </div>
+      {eff === 'team' && <AiPicker />}
       <button className="btn primary" style={{ width: '100%', justifyContent: 'center', padding: 10 }} disabled={busy} onClick={run}>
         <IMagic /> {busy ? (eff === 'team' ? `${aiName} is editing…` : 'Editing…') : doc.cues.length ? 'Auto-edit again' : 'Auto-edit'}
       </button>
       <p className="hint" style={{ marginTop: 8 }}>
         {eff === 'rules'
           ? 'Uses the Bajaj storytelling rules: story play and story rewrite, Unfolding Insights under questions, coin chime on low interest and savings, warm keys for the guest, harp glide, intro music under the CTA, one background music at a time and the disclaimers.'
-          : `${eff === 'team' ? aiName : 'Claude'} reads the timed script, the library and your default guidelines and writes the cue sheet; the storytelling rules (coin chime, CTA music, one music at a time, disclaimers) still apply on top.`}
+          : `${eff === 'team' ? aiLabel : 'Claude'} reads the timed script, the library and your default guidelines and writes the cue sheet; the storytelling rules (coin chime, CTA music, one music at a time, disclaimers) still apply on top.`}
         {' '}Your own clips stay.
       </p>
       {report && (

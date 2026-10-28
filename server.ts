@@ -54,7 +54,7 @@ async function main() {
     const vite = await createServer({ root, server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   }
-  app.listen(config.port, () => console.log(`[eddy] listening on :${config.port} (${config.production ? 'production' : 'development'}, storage: ${config.storage}, AI: ${aiReady() ? `${config.geminiModel} via ${aiMode()}` : 'off'})`));
+  app.listen(config.port, () => console.log(`[eddy] listening on :${config.port} (${config.production ? 'production' : 'development'}, storage: ${config.storage}, AI: ${aiReady() ? [config.project || config.geminiApiKey ? `Gemini via ${aiMode()}` : '', config.openaiApiKey ? 'ChatGPT' : ''].filter(Boolean).join(' + ') : 'off'})`));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main();

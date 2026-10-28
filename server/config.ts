@@ -21,6 +21,13 @@ export const config = {
   geminiModel: env.GEMINI_MODEL || 'gemini-2.5-flash',
   /** optional API key (secret). Without it, Vertex AI uses the Cloud Run service account. */
   geminiApiKey: env.GEMINI_API_KEY || env.GOOGLE_API_KEY || '',
+  /** extra Gemini models people can pick in the editor (comma separated) */
+  geminiModels: (env.GEMINI_MODELS || 'gemini-2.5-flash,gemini-2.5-pro').split(',').map((s) => s.trim()).filter(Boolean),
+  /** ChatGPT: secret key, the default model, and optionally a fixed list of models (else read from the key's account) */
+  openaiApiKey: env.OPENAI_API_KEY || '',
+  openaiModel: env.OPENAI_MODEL || 'gpt-4.1-mini',
+  openaiModels: (env.OPENAI_MODELS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  openaiBaseUrl: (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
   /** 'vertex' (default; with a key this is Vertex AI express mode) or 'gemini-api' (Google AI Studio key) */
   geminiBackend: (env.GEMINI_BACKEND === 'gemini-api' ? 'gemini-api' : 'vertex') as 'vertex' | 'gemini-api',
   aiDailyLimit: Number(env.AI_DAILY_LIMIT || 60),

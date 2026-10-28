@@ -78,3 +78,5 @@ textarea.guide { width: 100%; min-height: 60vh; border: 1px solid var(--line-2);
 .cue .cw { display: flex; flex-direction: column; min-width: 0; }
 .cue .ct { font-weight: 600; }
 .cue .cr { color: var(--muted); font-size: 12px; }
+.aipick { display: grid; grid-template-columns: 1fr 1.4fr; gap: 0 8px; }
+.aipick .field { margin-bottom: 8px; }
