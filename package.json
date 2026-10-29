@@ -16,7 +16,8 @@
     "build:demo": "vite build --mode demo",
     "test:gcp": "node scripts/test-gcp.mjs",
     "e2e:gcp": "node scripts/e2e-gcp.mjs",
-    "e2e:remote": "node test/e2e/gcp-e2e.mjs"
+    "e2e:remote": "node test/e2e/gcp-e2e.mjs",
+    "local:gcp": "node scripts/local-gcp.mjs"
   },
   "dependencies": {
     "@breezystack/lamejs": "1.2.7",

@@ -22,6 +22,8 @@ export const config = {
   prefix: env.FIRESTORE_PREFIX ?? 'eddy_',
 
   geminiModel: env.GEMINI_MODEL || 'gemini-2.5-flash',
+  /** Gemini through Vertex AI with the service account (no key). Off on a PC with emulators, where there is no service account */
+  vertexEnabled: env.GEMINI_VERTEX !== 'off',
   /** optional API key (secret). Without it, Vertex AI uses the Cloud Run service account. */
   geminiApiKey: env.GEMINI_API_KEY || env.GOOGLE_API_KEY || '',
   /** extra Gemini models people can pick in the editor (comma separated) */

@@ -20,7 +20,7 @@ export interface ProviderInfo { id: ProviderId; name: string; mode: string; mode
 
 /* ---------- Gemini ---------- */
 let geminiClient: GoogleGenAI | null = null;
-const geminiReady = () => !!config.geminiApiKey || !!config.project;
+const geminiReady = () => !!config.geminiApiKey || (!!config.project && config.vertexEnabled);
 export const aiMode = () =>
   config.geminiBackend === 'gemini-api' ? 'Gemini API key' : config.geminiApiKey ? 'Vertex AI (API key)' : 'Vertex AI (service account)';
 const gemini = () => (geminiClient ??= config.geminiBackend === 'gemini-api'
