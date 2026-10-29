@@ -1,6 +1,6 @@
 /*
  * Eddy v3 server: one container for Cloud Run.
- *   /api/session            team passcode gate
+ *   /api/session, /api/users, /api/me   sign-in and user accounts (admin manages users)
  *   /api/folders, /projects, /versions, /categories, /assets, /guidelines   data (Firestore)
  *   /api/audio, /api/uploads                                                 audio (Cloud Storage)
  *   /api/ai                                                                  Gemini on Vertex AI
@@ -12,7 +12,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { checkConfig, config } from './server/config.js';
-import { requireUser, sessionRoutes } from './server/auth.js';
+import { ensureAdmin, requireUser, sessionRoutes } from './server/auth.js';
+import { userRoutes } from './server/routes/users.js';
 import { makeStore, type Store } from './server/store.js';
 import { makeBlobs, type Blobs } from './server/blobs.js';
 import { dataRoutes, errorHandler } from './server/routes/data.js';
@@ -36,8 +37,8 @@ export function createApi(store: Store = makeStore(), blobs: Blobs = makeBlobs()
   const health = (_req: express.Request, res: express.Response) => res.json({ ok: true, storage: config.storage, ai: aiReady() });
   app.get('/healthz', health);
   app.get('/api/health', health);
-  app.use('/api', sessionRoutes());
-  app.use('/api', requireUser, dataRoutes(store), audioRoutes(blobs), aiRoutes(), pipelineRoutes(store, blobs));
+  app.use('/api', sessionRoutes(store));
+  app.use('/api', requireUser(store), userRoutes(store), dataRoutes(store), audioRoutes(blobs), aiRoutes(), pipelineRoutes(store, blobs));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
   app.use(errorHandler);
   return app;
@@ -45,7 +46,9 @@ export function createApi(store: Store = makeStore(), blobs: Blobs = makeBlobs()
 
 async function main() {
   for (const p of checkConfig()) console.warn('[eddy] ' + p);
-  const app = createApi();
+  const store = makeStore();
+  const app = createApi(store);
+  await ensureAdmin(store).catch((e) => console.warn('[eddy] could not create the admin account yet:', e?.message || e));
   // the API's error handler sits before the UI on purpose; UI routes below
   const root = config.production ? path.resolve(here, '..') : here;
   if (config.production) {

@@ -10,7 +10,8 @@ export const config = {
   /** proxies in front of the app that add X-Forwarded-For: 1 on Cloud Run, 2 behind API Gateway */
   trustProxyHops: Number(env.TRUST_PROXY_HOPS || 1),
 
-  passcode: env.EDDY_PASSCODE || '',
+  /** password for the first account, "admin" (EDDY_PASSCODE is accepted for older setups) */
+  adminPassword: env.ADMIN_PASSWORD || env.EDDY_PASSCODE || '',
   sessionSecret: env.SESSION_SECRET || '',
   pipelineToken: env.PIPELINE_TOKEN || '',
 
@@ -42,7 +43,8 @@ export const config = {
 
 export function checkConfig(): string[] {
   const problems: string[] = [];
-  if (!config.passcode) problems.push('EDDY_PASSCODE is not set: nobody can sign in.');
+  if (!config.adminPassword) problems.push('ADMIN_PASSWORD is not set: the admin account can only be created once it is.');
+  else if (config.adminPassword.length < 8) problems.push('ADMIN_PASSWORD should be at least 8 characters.');
   if (!config.sessionSecret || config.sessionSecret.length < 24) problems.push('SESSION_SECRET must be set to a random string of at least 24 characters.');
   if (config.geminiBackend === 'gemini-api' && !config.geminiApiKey) problems.push('GEMINI_BACKEND=gemini-api needs GEMINI_API_KEY.');
   if (config.storage === 'gcp' && !config.bucket) problems.push('EDDY_BUCKET is required when EDDY_STORAGE=gcp.');

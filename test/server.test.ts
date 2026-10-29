@@ -17,18 +17,23 @@ Object.assign(process.env, gcp
   ? { EDDY_STORAGE: 'gcp', EDDY_BUCKET: process.env.EDDY_BUCKET || 'eddy-test', FIRESTORE_PREFIX: `t${Date.now().toString(36)}_` }
   : { EDDY_STORAGE: 'local', EDDY_DATA_DIR: dir });
 Object.assign(process.env, {
-  EDDY_PASSCODE: 'open-sesame', SESSION_SECRET: 'x'.repeat(40),
+  ADMIN_PASSWORD: 'open-sesame-admin', SESSION_SECRET: 'x'.repeat(40),
   PIPELINE_TOKEN: 'pipe-token-123', GOOGLE_CLOUD_PROJECT: 'test-project', ALLOWED_AUDIO_HOSTS: 'cdn.example.com',
   GEMINI_API_KEY: FAKE_KEY, OPENAI_API_KEY: FAKE_OPENAI, OPENAI_MODELS: 'gpt-4.1-mini,gpt-4.1', OPENAI_MODEL: 'gpt-4.1-mini',
 });
 
 let aiMod: any;
-let base = '', cookie = '', close: () => void = () => {};
+let base = '', cookie = '', adminCookie = '', close: () => void = () => {};
+const login = async (username: string, password: string) => {
+  const r = await call('/api/session', { method: 'POST', json: { username, password }, auth: 'none' });
+  return { status: r.status, body: await r.json(), cookie: (r.headers.get('set-cookie') || '').split(';')[0] };
+};
+const as = (c: string) => ({ headers: { Cookie: c } });
 const call = (p: string, init: RequestInit & { json?: unknown; auth?: 'cookie' | 'pipeline' | 'none' } = {}) => {
   const { json, auth = 'cookie', ...rest } = init;
   const headers: Record<string, string> = { ...(rest.headers as Record<string, string>) };
   if (json !== undefined) headers['Content-Type'] = 'application/json';
-  if (auth === 'cookie' && cookie) headers.Cookie = cookie;
+  if (auth === 'cookie' && cookie && !headers.Cookie) headers.Cookie = cookie;
   if (auth === 'pipeline') headers.Authorization = 'Bearer pipe-token-123';
   return fetch(base + p, { ...rest, headers, body: json !== undefined ? JSON.stringify(json) : rest.body });
 };
@@ -52,22 +57,69 @@ describe('health', () => {
   });
 });
 
-describe('passcode gate', () => {
+describe('user accounts', () => {
   it('refuses the API without a session', async () => {
     expect((await call('/api/projects', { auth: 'none' })).status).toBe(401);
   });
-  it('rejects a wrong passcode and accepts the right one', async () => {
-    expect((await call('/api/session', { method: 'POST', json: { passcode: 'nope', name: 'A' }, auth: 'none' })).status).toBe(401);
-    const r = await call('/api/session', { method: 'POST', json: { passcode: 'open-sesame', name: 'Nishant' }, auth: 'none' });
-    expect(r.status).toBe(200);
-    cookie = (r.headers.get('set-cookie') || '').split(';')[0];
-    expect(cookie).toMatch(/^eddy_session=/);
-    expect(await (await call('/api/session')).json()).toEqual({ name: 'Nishant' });
+  it('creates admin from ADMIN_PASSWORD and refuses wrong passwords', async () => {
+    expect((await login('admin', 'nope-nope')).status).toBe(401);
+    expect((await login('nobody', 'open-sesame-admin')).status).toBe(401);
+    const a = await login('Admin', 'open-sesame-admin'); // usernames are not case sensitive
+    expect(a.status).toBe(200);
+    expect(a.body).toEqual({ username: 'admin', name: 'Admin', role: 'admin' });
+    adminCookie = a.cookie;
+    expect(adminCookie).toMatch(/^eddy_session=/);
+  });
+  it('lets the admin add users, with checks', async () => {
+    const add = (json: unknown) => call('/api/users', { method: 'POST', json, ...as(adminCookie) });
+    expect((await add({ username: 'nishant', name: 'Nishant', password: 'short' })).status).toBe(400);
+    expect((await add({ username: 'Bad Name!', name: 'X', password: 'long-enough-1' })).status).toBe(400);
+    const r = await add({ username: 'nishant', name: 'Nishant', password: 'nishant-pass-1', role: 'editor' });
+    expect(r.status).toBe(201);
+    expect(await r.json()).toMatchObject({ username: 'nishant', name: 'Nishant', role: 'editor', disabled: false, createdBy: 'admin' });
+    expect((await add({ username: 'nishant', name: 'Again', password: 'nishant-pass-1' })).status).toBe(409);
+    const list = await (await call('/api/users', as(adminCookie))).json();
+    expect(list.map((u: any) => u.username)).toEqual(['admin', 'nishant']);
+    expect(JSON.stringify(list)).not.toMatch(/passHash|scrypt/);
+  });
+  it('signs a user in; editors cannot manage users', async () => {
+    const n = await login('nishant', 'nishant-pass-1');
+    expect(n.body).toEqual({ username: 'nishant', name: 'Nishant', role: 'editor' });
+    cookie = n.cookie;
+    expect(await (await call('/api/session')).json()).toEqual({ username: 'nishant', name: 'Nishant', role: 'editor' });
+    expect((await call('/api/users')).status).toBe(403);
+    expect((await call('/api/users', { method: 'POST', json: { username: 'x1', password: 'long-enough-1' } })).status).toBe(403);
   });
   it('rejects a tampered cookie', async () => {
     const bad = cookie.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A'));
     const r = await fetch(base + '/api/projects', { headers: { Cookie: bad } });
     expect(r.status).toBe(401);
+  });
+  it('lets people change their own password', async () => {
+    expect((await call('/api/me/password', { method: 'POST', json: { current: 'wrong-one', next: 'nishant-pass-2' } })).status).toBe(400);
+    expect((await call('/api/me/password', { method: 'POST', json: { current: 'nishant-pass-1', next: 'nishant-pass-2' } })).status).toBe(200);
+    expect((await login('nishant', 'nishant-pass-1')).status).toBe(401);
+    expect((await login('nishant', 'nishant-pass-2')).status).toBe(200);
+  });
+  it('admin can reset a password and disable an account at once', async () => {
+    const patch = (json: unknown) => call('/api/users/nishant', { method: 'PATCH', json, ...as(adminCookie) });
+    expect((await patch({ password: 'reset-by-admin' })).status).toBe(200);
+    expect((await login('nishant', 'reset-by-admin')).status).toBe(200);
+    expect((await patch({ disabled: true })).status).toBe(200);
+    expect((await call('/api/projects')).status).toBe(401); // existing session stops working
+    expect((await login('nishant', 'reset-by-admin')).status).toBe(403);
+    expect((await patch({ disabled: false })).status).toBe(200);
+    expect((await call('/api/projects')).status).toBe(200);
+  });
+  it('always keeps one active admin', async () => {
+    const patchAdmin = (json: unknown) => call('/api/users/admin', { method: 'PATCH', json, ...as(adminCookie) });
+    expect((await patchAdmin({ role: 'editor' })).status).toBe(400);
+    expect((await patchAdmin({ disabled: true })).status).toBe(400);
+    expect((await call('/api/users/admin', { method: 'DELETE', ...as(adminCookie) })).status).toBe(400);
+    const tmp = await call('/api/users', { method: 'POST', json: { username: 'temp.user', password: 'temporary-1' }, ...as(adminCookie) });
+    expect(tmp.status).toBe(201);
+    expect((await call('/api/users/temp.user', { method: 'DELETE', ...as(adminCookie) })).status).toBe(200);
+    expect((await login('temp.user', 'temporary-1')).status).toBe(401);
   });
 });
 

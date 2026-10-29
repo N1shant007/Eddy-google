@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploys Eddy v3 to Google Cloud: Cloud Run (app + API), Firestore (data), Cloud Storage (audio),
-# Secret Manager (passcode, session secret, pipeline token, optional AI keys), Vertex AI (Gemini).
+# Secret Manager (admin password, session secret, pipeline token, optional AI keys), Vertex AI (Gemini).
 #
 # Safe to run again: it creates only what is missing and then deploys a new revision.
 # Run it from the repo folder in Cloud Shell (or anywhere `gcloud` is signed in as a project Owner/Editor):
@@ -12,9 +12,10 @@
 #   SERVICE=eddy                  Cloud Run service name
 #   BUCKET=<project>-eddy-audio   Cloud Storage bucket for audio
 #   FIRESTORE_DATABASE=(default)  FIRESTORE_LOCATION=nam5   (only used when the database does not exist yet)
-#   PUBLIC=yes                    yes: anyone with the link reaches the passcode page. no: only IAM callers (API Gateway)
+#   PUBLIC=yes                    yes: anyone with the link reaches the sign-in page. no: only IAM callers (API Gateway)
 #   TRUST_PROXY_HOPS=1            1 on Cloud Run directly, 2 behind API Gateway
-#   EDDY_PASSCODE=…               team passcode (asked for on the first run if not set)
+#   ADMIN_PASSWORD=…              password of the "admin" account (asked for on the first run if not set);
+#                                 admin then adds everyone else on the Users page
 #   GEMINI_API_KEY=… OPENAI_API_KEY=…   optional; stored in Secret Manager. Without GEMINI_API_KEY, Gemini uses Vertex AI
 #                                 with the service account (no key needed).
 #   ALLOWED_AUDIO_HOSTS=…  PIPELINE_CALLBACK_URL=…  DRIVE_FOLDER_ID=…   optional pipeline hand-off settings
@@ -89,11 +90,12 @@ put_secret() {
   g secrets add-iam-policy-binding "$name" --member="serviceAccount:$SA" --role=roles/secretmanager.secretAccessor >/dev/null
   secrets+=("$var=$name:latest")
 }
-if ! g secrets describe eddy-passcode >/dev/null 2>&1 && [[ -z "${EDDY_PASSCODE:-}" ]]; then
-  read -r -s -p "Team passcode for Eddy (people type this to sign in): " EDDY_PASSCODE; echo
-  [[ ${#EDDY_PASSCODE} -ge 6 ]] || { echo "Use at least 6 characters."; exit 1; }
+if ! g secrets describe eddy-admin-password >/dev/null 2>&1 && [[ -z "${ADMIN_PASSWORD:-}" ]]; then
+  read -r -s -p "Password for the Eddy \"admin\" account (admin adds the other users): " ADMIN_PASSWORD; echo
 fi
-put_secret eddy-passcode EDDY_PASSCODE "${EDDY_PASSCODE:-}" update
+if [[ -n "${ADMIN_PASSWORD:-}" && ${#ADMIN_PASSWORD} -lt 8 ]]; then echo "Use at least 8 characters for the admin password."; exit 1; fi
+# used only to create the admin account the first time; after that, change passwords on the Users page
+put_secret eddy-admin-password ADMIN_PASSWORD "${ADMIN_PASSWORD:-}" update
 put_secret eddy-session-secret SESSION_SECRET "$(openssl rand -hex 32)"
 put_secret eddy-pipeline-token PIPELINE_TOKEN "$(openssl rand -hex 24)"
 # AI keys are optional: added when given now, kept when stored earlier
@@ -126,9 +128,10 @@ fi
 cat <<EOF
 
 Eddy is live: $URL
-  Sign in with the team passcode.      Read it:  gcloud secrets versions access latest --secret=eddy-passcode --project=$PROJECT
+  Sign in as "admin" with the admin password, then add people on the Users page.
+  Admin password (first sign-in):      gcloud secrets versions access latest --secret=eddy-admin-password --project=$PROJECT
   Pipeline token for /api/pipeline/*:  gcloud secrets versions access latest --secret=eddy-pipeline-token --project=$PROJECT
   Full check of the live site (creates and then deletes an "E2E test" folder):
-    BASE=$URL PASSCODE=\$(gcloud secrets versions access latest --secret=eddy-passcode --project=$PROJECT) \\
+    BASE=$URL ADMIN_PASSWORD=\$(gcloud secrets versions access latest --secret=eddy-admin-password --project=$PROJECT) \\
     PIPELINE_TOKEN=\$(gcloud secrets versions access latest --secret=eddy-pipeline-token --project=$PROJECT) npm run e2e:remote
 EOF

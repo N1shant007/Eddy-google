@@ -1,5 +1,5 @@
 /* End-to-end check of a running Eddy (production build) in a real browser.
-   BASE=https://<your Cloud Run URL> PASSCODE=… PIPELINE_TOKEN=… npm run e2e:remote   (AUDIO=episode.wav optional)
+   BASE=https://<your Cloud Run URL> ADMIN_PASSWORD=… PIPELINE_TOKEN=… npm run e2e:remote   (AUDIO=episode.wav optional)
    Signs in, waits for the starter library, creates a folder and project, uploads a >8 MB episode (multi-part),
    runs the rules auto-edit, saves a version, saves the final mix, checks history after a reload, and tests the
    pipeline hand-off (episode in → auto-edit on open), then deletes its test folder. Exits non-zero on any failure.
@@ -12,8 +12,10 @@ import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright'); // installed globally or as a dev dependency
 
 const BASE = process.env.BASE || 'http://localhost:8090';
-const PASS = process.env.PASSCODE, PIPE = process.env.PIPELINE_TOKEN, SHOTS = process.env.SHOTS || '.';
-if (!PASS || !PIPE) { console.error('Set PASSCODE and PIPELINE_TOKEN (and BASE for a deployed Eddy).'); process.exit(2); }
+const ADMIN = process.env.ADMIN_USER || 'admin', PASS = process.env.ADMIN_PASSWORD || process.env.PASSCODE, PIPE = process.env.PIPELINE_TOKEN, SHOTS = process.env.SHOTS || '.';
+if (!PASS || !PIPE) { console.error('Set ADMIN_PASSWORD and PIPELINE_TOKEN (and BASE for a deployed Eddy).'); process.exit(2); }
+/* a throw-away editor account the test creates through the Users page and removes at the end */
+const TESTER = `e2e-${Date.now().toString(36)}`, TESTER_PW = `pw-${Math.random().toString(36).slice(2)}-${Date.now()}`;
 /* test episode: 150 s of speech-like bursts, 26 MB WAV (so it uploads in 4 parts) */
 const AUDIO = process.env.AUDIO || (() => {
   const rate = 44100, secs = 150, n = rate * secs, data = Buffer.alloc(n * 4);
@@ -53,7 +55,7 @@ const page = await ctx.newPage();
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 const external = [];
 page.on('requestfailed', (r) => { if (!r.url().startsWith(BASE)) external.push(r.url()); });
-page.on('console', (m) => { if (m.type() === 'error' && !/status of (401|404)|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY/.test(m.text())) errors.push('console: ' + m.text()); });
+page.on('console', (m) => { if (m.type() === 'error' && !/status of (401|403|404)|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY/.test(m.text())) errors.push('console: ' + m.text()); });
 page.on('dialog', (d) => d.dismiss());
 const api = (p, init) => page.evaluate(async ([p, init]) => { const r = await fetch(p, init); return { status: r.status, body: await r.json().catch(() => null) }; }, [p, init]);
 const pipe = async (p, init = {}) => { const r = await fetch(BASE + p, { ...init, headers: { Authorization: `Bearer ${PIPE}`, ...(init.headers || {}) } }); return { status: r.status, body: await r.json().catch(() => null) }; };
@@ -66,17 +68,33 @@ try {
   for (const p of ['/assets/missing.js', '/assets/index.js.map']) if ((await fetch(BASE + p)).status !== 404) fail(`${p} should be 404`);
   log(`health ok (storage: ${h.storage}, AI: ${h.ai ? 'on' : 'off'}); missing files and source maps return 404`);
 
-  /* 1. sign in */
+  /* 1. sign in as admin, add an editor on the Users page, sign in as that editor */
+  const signIn = async (u, pw) => {
+    await page.fill('#si-user', u);
+    await page.fill('#si-pass', pw);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+  };
   await page.goto(BASE);
-  await page.fill('#si-pass', 'wrong');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await signIn(ADMIN, 'wrong-password');
   await page.getByText(/not right/i).waitFor({ timeout: 10000 });
-  log('wrong passcode refused');
-  await page.locator('input').first().fill('E2E Tester');
-  await page.fill('#si-pass', PASS);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  log('wrong password refused');
+  await signIn(ADMIN, PASS);
+  await page.getByRole('button', { name: 'Users', exact: true }).click();
+  await page.getByRole('button', { name: /Add user/ }).click();
+  await page.fill('#nu-user', TESTER);
+  await page.fill('#nu-name', 'E2E Tester');
+  await page.fill('#nu-pass', TESTER_PW);
+  await page.locator('.modal button[type=submit]').click();
+  await page.getByText(TESTER, { exact: true }).waitFor({ timeout: 10000 });
+  log(`admin signed in and added the editor "${TESTER}" on the Users page`);
+  await shot('0-users-page');
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.locator('#si-pass').waitFor();
+  await signIn(TESTER, TESTER_PW);
   await page.getByRole('button', { name: /New project/ }).first().waitFor({ timeout: 15000 });
-  log('signed in');
+  if (await page.getByRole('button', { name: 'Users', exact: true }).count()) fail('an editor sees the Users page');
+  if ((await api('/api/users')).status !== 403) fail('an editor can list users');
+  log('editor signed in; no Users page and no access to /api/users');
 
   /* 2. starter library imports itself */
   let assets = 0;
@@ -155,7 +173,7 @@ try {
   const srt = '1\n00:00:00,000 --> 00:00:05,000\nWelcome to Money Matters by Bajaj.\n\n2\n00:00:07,200 --> 00:00:12,000\nThanks Shweta.\n';
   const ep = await pipe('/api/pipeline/episodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Pipeline ep', folder: `${ROOT}/Season 1`, product: 'Home Loan', script: SCRIPT, subtitles: srt, audioHash: hash, externalId: 'wc-e2e' }) });
   if (ep.status !== 201) fail('pipeline create: ' + JSON.stringify(ep));
-  await page.goto(`${BASE}/${ep.body.editorPath}`);
+  await page.goto(`${BASE}${ep.body.editorPath}`);
   let pd = null;
   for (let i = 0; i < 60 && !(pd?.draft?.clips?.length && pd?.pipeline?.autoEditPending === false); i++) { await page.waitForTimeout(1000); pd = (await api(`/api/projects/${ep.body.projectId}`)).body; }
   if (!pd?.draft?.clips?.length || pd.pipeline.autoEditPending !== false) fail('pipeline episode was not auto-edited on open');
@@ -171,11 +189,20 @@ try {
     log(`removed the "${ROOT}" folder and its projects (set KEEP=1 to keep them)`);
   }
 
-  /* 11. sign out */
+  /* 11. sign out; admin removes the test editor, who can then no longer sign in */
   await page.getByRole('button', { name: 'Sign out' }).click();
   await page.locator('#si-pass').waitFor();
   if ((await api('/api/projects')).status !== 401) fail('still signed in after sign out');
-  log('signed out');
+  await signIn(ADMIN, PASS);
+  await page.getByRole('button', { name: 'Users', exact: true }).click();
+  await page.locator('tr', { hasText: TESTER }).getByRole('button', { name: 'Remove' }).click();
+  await page.locator('.modal').getByRole('button', { name: 'Delete' }).click();
+  await page.getByText(TESTER, { exact: true }).waitFor({ state: 'detached', timeout: 10000 });
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.locator('#si-pass').waitFor();
+  const gone = await api('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: TESTER, password: TESTER_PW }) });
+  if (gone.status !== 401) fail('a removed user can still sign in');
+  log('signed out; admin removed the test editor, who can no longer sign in');
 } catch (e) {
   await shot('failure').catch(() => {});
   if (!process.exitCode) { console.error('✗', e.message); process.exitCode = 1; }

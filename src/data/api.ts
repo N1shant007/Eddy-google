@@ -1,9 +1,9 @@
 import type { Asset, Category, Guideline, ProjectDoc } from '@eddy/rules';
-import type { Backend, Folder, Project, ProjectMeta, UserInfo, Version, VersionMeta } from './types';
+import type { Account, Backend, Folder, Project, ProjectMeta, UserInfo, Version, VersionMeta } from './types';
 import { sha256 } from './util';
 
 /* Talks to the Eddy server (Express on Cloud Run): Firestore data, Cloud Storage audio, Gemini.
-   The session is a cookie set by the passcode gate, so every request is same-origin with credentials. */
+   The session is a cookie set at sign-in, so every request is same-origin with credentials. */
 
 export class ApiError extends Error { constructor(public status: number, msg: string) { super(msg); } }
 let onSignedOut: (() => void) | null = null;
@@ -32,17 +32,24 @@ export class ApiBackend implements Backend {
   private blobCache = new Map<string, Blob>();
   private me: UserInfo | null = null;
 
-  /* ---------- session (team passcode) ---------- */
+  /* ---------- session (user accounts) ---------- */
+  private asUser = (s: { username: string; name: string; role: 'admin' | 'editor' }): UserInfo => ({ id: s.username, email: '', name: s.name, username: s.username, role: s.role });
   async user(): Promise<UserInfo | null> {
     if (this.me) return this.me;
-    try { const s = await api<{ name: string }>('/session'); return (this.me = { id: s.name, email: '', name: s.name }); }
+    try { return (this.me = this.asUser(await api('/session'))); }
     catch { return null; }
   }
-  async signIn(passcode: string, name: string) {
-    const s = await api<{ name: string }>('/session', { method: 'POST', json: { passcode, name } });
-    this.me = { id: s.name, email: '', name: s.name };
+  async signIn(username: string, password: string) {
+    this.me = this.asUser(await api('/session', { method: 'POST', json: { username, password } }));
     return this.me;
   }
+  accounts = {
+    list: () => api<Account[]>('/users'),
+    add: (a: { username: string; name: string; password: string; role: 'admin' | 'editor' }) => api<Account>('/users', { method: 'POST', json: a }),
+    update: (username: string, patch: Record<string, unknown>) => api<Account>(`/users/${encodeURIComponent(username)}`, { method: 'PATCH', json: patch }),
+    remove: async (username: string) => { await api(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' }); },
+    changeOwnPassword: async (current: string, next: string) => { await api('/me/password', { method: 'POST', json: { current, next } }); },
+  };
   async signOut() { await api('/session', { method: 'DELETE' }).catch(() => {}); this.me = null; }
 
   /* ---------- folders ---------- */

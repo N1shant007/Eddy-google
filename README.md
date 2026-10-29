@@ -2,7 +2,7 @@
 
 Eddy places intro/outro, background music, sound effects and disclaimers on AI-voice podcast episodes, with
 projects in folders, full version history, a timeline editor and the Bajaj storytelling auto-edit.
-It is Eddy v2 rebuilt for the pipeline's stack and Google Cloud. A browser-only test build (`npm run build:demo`, passcode `demo`) is used for the hosted preview.
+It is Eddy v2 rebuilt for the pipeline's stack and Google Cloud. A browser-only test build (`npm run build:demo`, any username, password `demo`) is used for the hosted preview.
 
 | Part | Technology |
 |---|---|
@@ -11,18 +11,18 @@ It is Eddy v2 rebuilt for the pipeline's stack and Google Cloud. A browser-only 
 | Data | Firestore (collections prefixed `eddy_`) |
 | Audio | Cloud Storage bucket (`audio/<sha256>`, `exports/<project>/…`) |
 | AI | Gemini via `@google/genai` (Vertex AI or API key) and ChatGPT (OpenAI API); keys kept server-side; provider and model picked in the editor |
-| Sign-in | Team passcode gate (`EDDY_PASSCODE`), signed session cookie |
+| Sign-in | User accounts (username + password, scrypt hashes in Firestore); `admin` manages users; signed session cookie |
 | Hosting | One container on Cloud Run (us-central1), behind API Gateway |
 
 ## Run locally (no Google Cloud needed)
 
-**Windows:** double-click `Setup Eddy (Windows).bat`. It installs Node.js if needed, the libraries, a private `.env` (passcode `eddy-local`), runs the tests, builds and starts Eddy on http://localhost:8080. Later, start it with `scripts\windows\start-eddy.bat`.
+**Windows:** double-click `Setup Eddy (Windows).bat`. It installs Node.js if needed, the libraries, a private `.env` (sign in as `admin` / `eddy-local-admin`), runs the tests, builds and starts Eddy on http://localhost:8080. Later, start it with `scripts\windows\start-eddy.bat`.
 
 **macOS / Linux:**
 
 ```bash
 npm install
-EDDY_STORAGE=local EDDY_PASSCODE=pick-one SESSION_SECRET=$(openssl rand -hex 32) npm run dev   # http://localhost:8080
+EDDY_STORAGE=local ADMIN_PASSWORD=pick-one-8+ SESSION_SECRET=$(openssl rand -hex 32) npm run dev   # http://localhost:8080
 npm test            # rules engine + API tests (32)
 ```
 
@@ -31,11 +31,11 @@ To try the real services locally, set `EDDY_BUCKET`, `GOOGLE_CLOUD_PROJECT` and 
 
 ## Configuration (environment variables only)
 
-See `.env.example`. Secrets (`EDDY_PASSCODE`, `SESSION_SECRET`, `PIPELINE_TOKEN`) belong in Secret Manager, mounted as env vars on Cloud Run.
+See `.env.example`. Secrets (`ADMIN_PASSWORD`, `SESSION_SECRET`, `PIPELINE_TOKEN`) belong in Secret Manager, mounted as env vars on Cloud Run.
 
 | Variable | Needed | What it does |
 |---|---|---|
-| `EDDY_PASSCODE` | yes | Team passcode for the sign-in gate |
+| `ADMIN_PASSWORD` | yes | Password of the `admin` account, used to create it the first time (8+ characters). Admin adds everyone else on the Users page |
 | `SESSION_SECRET` | yes | Random string (32+ chars) that signs session cookies |
 | `EDDY_BUCKET` | yes | Cloud Storage bucket for audio; also switches storage to Firestore + GCS |
 | `GOOGLE_CLOUD_PROJECT` | yes | `cobalt-mind-422108`; Firestore, Vertex AI |
@@ -54,7 +54,7 @@ See `.env.example`. Secrets (`EDDY_PASSCODE`, `SESSION_SECRET`, `PIPELINE_TOKEN`
 
 ## Keeping keys secret
 
-Keys and passcodes are only ever read by the server, from environment variables:
+Keys and passwords are only ever read by the server, from environment variables:
 
 - **Locally:** copy `.env.example` to `.env` and fill it in. `.env` is git-ignored and docker-ignored, so it is never committed or baked into the image. The server loads it at start-up.
 - **Cloud Run:** `scripts/deploy-gcp.sh` stores them in Secret Manager for you. By hand:
@@ -63,7 +63,7 @@ Keys and passcodes are only ever read by the server, from environment variables:
   printf '%s' "<your Gemini API key>" | gcloud secrets create eddy-gemini-api-key --data-file=- --project=cobalt-mind-422108
   printf '%s' "<your OpenAI API key>" | gcloud secrets create eddy-openai-api-key --data-file=- --project=cobalt-mind-422108
   gcloud secrets add-iam-policy-binding eddy-gemini-api-key --member=serviceAccount:$SA --role=roles/secretmanager.secretAccessor
-  # deploy flag: --set-secrets=GEMINI_API_KEY=eddy-gemini-api-key:latest,OPENAI_API_KEY=eddy-openai-api-key:latest,EDDY_PASSCODE=eddy-passcode:latest,SESSION_SECRET=eddy-session-secret:latest
+  # deploy flag: --set-secrets=GEMINI_API_KEY=eddy-gemini-api-key:latest,OPENAI_API_KEY=eddy-openai-api-key:latest,ADMIN_PASSWORD=eddy-admin-password:latest,SESSION_SECRET=eddy-session-secret:latest
   ```
 
 Safeguards in this repo:
@@ -75,7 +75,7 @@ Safeguards in this repo:
 
 Full documentation, functional requirements with acceptance tests, and the deployment runbook:
 [`docs/Eddy-v3-Documentation-and-Requirements.txt`](docs/Eddy-v3-Documentation-and-Requirements.txt).
-The team passcode is a secret: give it to the deploy script when asked (or as `EDDY_PASSCODE=…`); it is stored only in Secret Manager.
+The admin password is a secret: give it to the deploy script when asked (or as `ADMIN_PASSWORD=…`); it is stored only in Secret Manager. Sign in as `admin` and add everyone else on the Users page.
 
 
 One script sets up everything and deploys: Firestore (Native mode), a private Cloud Storage bucket, a service account
@@ -89,7 +89,7 @@ git clone -b v3 https://github.com/N1shant007/Eddy-google.git && cd Eddy-google
 PROJECT=cobalt-mind-422108 ./scripts/deploy-gcp.sh
 ```
 
-It asks for the team passcode the first time. Optional settings go in front of the command, for example
+It asks for the admin password the first time. Optional settings go in front of the command, for example
 `GEMINI_API_KEY=… OPENAI_API_KEY=… ALLOWED_AUDIO_HOSTS=cdn.wondercraft.ai PUBLIC=no TRUST_PROXY_HOPS=2` (behind API Gateway).
 Without `GEMINI_API_KEY`, Gemini runs on Vertex AI with the service account, so no key is needed.
 
@@ -99,12 +99,12 @@ Without `GEMINI_API_KEY`, Gemini runs on Vertex AI with the service account, so 
 | Firestore database | `(default)`, collections `eddy_folders`, `eddy_projects`, `eddy_versions`, `eddy_categories`, `eddy_assets`, `eddy_guidelines` |
 | Cloud Storage bucket | `<project>-eddy-audio` (private; unfinished uploads cleared after a day) |
 | Service account | `eddy-run@…` with Firestore user, Vertex AI user, and object admin on the bucket only |
-| Secrets | `eddy-passcode`, `eddy-session-secret`, `eddy-pipeline-token`, and `eddy-gemini-api-key` / `eddy-openai-api-key` if given |
+| Secrets | `eddy-admin-password`, `eddy-session-secret`, `eddy-pipeline-token`, and `eddy-gemini-api-key` / `eddy-openai-api-key` if given |
 
 After deploying, check the live site end to end (it creates an "E2E test" folder, runs through everything, then deletes it):
 
 ```bash
-BASE=<service URL> PASSCODE=$(gcloud secrets versions access latest --secret=eddy-passcode) \
+BASE=<service URL> ADMIN_PASSWORD=$(gcloud secrets versions access latest --secret=eddy-admin-password) \
 PIPELINE_TOKEN=$(gcloud secrets versions access latest --secret=eddy-pipeline-token) npm run e2e:remote
 ```
 
