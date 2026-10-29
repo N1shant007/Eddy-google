@@ -82,7 +82,7 @@ function SignIn() {
         <ILogo width={40} height={40} />
         <h2>Eddy</h2>
         <p>AI podcast editor. Sign in with the username and password your admin gave you.</p>
-        {be.demo && <p style={{ background: '#fdeedf', color: '#9b4a07', borderRadius: 8, padding: '8px 10px', fontSize: 13 }}>Test build: everything is stored in this browser. Use any username; the password is <b>demo</b>.</p>}
+        {be.demo && <p style={{ background: '#fdeedf', color: '#9b4a07', borderRadius: 8, padding: '8px 10px', fontSize: 13 }}>Test build: everything is stored in this browser. Sign in as <b>admin</b> with the password <b>demo</b>, then add more users on the Users page.</p>}
         <div className="field" style={{ textAlign: 'left' }}>
           <label htmlFor="si-user">Username</label>
           <input id="si-user" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoCapitalize="none" spellCheck={false} autoFocus={!username} />
