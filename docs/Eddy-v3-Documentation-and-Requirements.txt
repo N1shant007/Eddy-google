@@ -1,0 +1,537 @@
+EDDY v3 - PROJECT DOCUMENTATION & FUNCTIONAL REQUIREMENTS
+=========================================================
+As of 29 Oct 2026 · Owner: Nishant Hipparagi (Bajaj)
+Repository: https://github.com/N1shant007/Eddy-google (branch v3, pull request #1)
+Status: CI green. Not yet deployed. Sign-in: user accounts; first account "admin". Target project cobalt-mind-422108, region us-central1.
+
+
+1. OVERVIEW
+-----------
+Eddy is Bajaj's web app for finishing AI-voice podcast episodes. It places the intro
+and outro, background music, sound effects and disclaimers on an episode, and keeps
+every edit in versioned projects. v3 is the Google Cloud build: one Cloud Run
+container, Firestore for data, Cloud Storage for audio, Gemini on Vertex AI.
+
+Who uses it
+- Editors at Bajaj sign in with their own username and password, organise episodes in
+  folders, run the auto-edit, fine-tune on a timeline and save the final mix.
+- Admins (starting with the built-in "admin" account) also add people, set or reset
+  their passwords, change roles and disable or remove accounts on the Users page.
+- The content pipeline (script -> Wondercraft voice) hands episodes to Eddy over an API
+  and collects the final MP3 when an editor saves it.
+
+Scope of v3
+- In: projects, folders, version history, timeline editor, rules and AI auto-edit,
+  shared audio library, guidelines, pipeline hand-off, Google Cloud deployment.
+- Out: Google sign-in / SSO, password reset by email, multi-user live co-editing,
+  server-side rendering of the mix (the browser renders it).
+
+How to use this document: each functional requirement (FR) has an ID, acceptance
+criteria and a verification method. Sign off an FR when its check passes. The test plan
+maps the automated suites to the FRs; the deployment runbook covers go-live.
+
+
+2. ARCHITECTURE AND TECH STACK
+------------------------------
+One container serves both the web app and the API. Data lives in Firestore, audio in a
+private Cloud Storage bucket, secrets in Secret Manager. The browser decodes audio,
+renders the mix and encodes the MP3, so the server does no audio processing.
+
+  +------------------+        +------------------------------+        +-------------------------+
+  | Bajaj editors    | -----> | Cloud Run service "eddy"     | -----> | Firestore               |
+  | (browser)        | HTTPS  |                              |        |  projects, versions,    |
+  | timeline, play-  | cookie |  Web app (React, from dist/) |        |  library, users         |
+  | back, auto-edit, |        |   runs in the editor's       | -----> | Cloud Storage           |
+  | renders the MP3  |        |   browser                    |        |  audio, uploads, exports|
+  +------------------+        |                              | -----> | Secret Manager          |
+                              |  API (Express, /api)         |        |  admin pw, tokens, keys |
+  +------------------+        |   sign-in & users, data,audio| -----> | Vertex AI (Gemini)      |
+  | Content pipeline | <----> |   AI proxy, pipeline hand-off|        |  AI auto-edit, Ask AI   |
+  | sends script,    | bearer |   reads secrets from env     | - - -> | Optional: OpenAI,       |
+  | audio, subtitles;| token  +------------------------------+        |  Google Drive           |
+  | gets final mix + |                                                +-------------------------+
+  | callback         |
+  +------------------+
+
+Editors and the pipeline both reach the same container; only the container talks to
+Firestore, Cloud Storage, Secret Manager and the AI services.
+
+| Layer    | Technology                                       | Notes |
+|----------|--------------------------------------------------|-------|
+| Frontend | React 19, Vite 6, Tailwind 4, TypeScript         | Konva timeline, Zustand state, Web Audio playback, lamejs MP3 encoding, JSZip |
+| Server   | Node 22, Express 5 (server.ts), TypeScript       | Serves the built app from dist/ and the API under /api |
+| Data     | Firestore, Native mode                           | Collections prefixed eddy_ (FIRESTORE_PREFIX) |
+| Audio    | Cloud Storage                                    | Stored once per SHA-256; private; served through the API with HTTP range support |
+| AI       | Gemini via @google/genai (Vertex AI); optional ChatGPT (OpenAI API) | Keys only on the server; per-person daily limit |
+| Access   | User accounts (username + password)              | Passwords stored as scrypt hashes; roles admin/editor; HMAC-signed session cookie, 7 days; bearer token for the pipeline |
+| Hosting  | Cloud Run, us-central1                           | Built from the repo Dockerfile; optional API Gateway in front |
+| Secrets  | Secret Manager                                   | Mounted as environment variables on Cloud Run |
+
+Firestore collections (no custom indexes needed)
+
+| Collection        | One document per  | Key fields |
+|-------------------|-------------------|------------|
+| eddy_folders      | Folder            | name, parentId (nested folders) |
+| eddy_projects     | Episode project   | name, folderId, product, headVersion, doc (current edit, compressed when long), pipeline (externalId, subtitles, autoEditPending, final) |
+| eddy_versions     | Saved version     | id <projectId>_<n>, versionNo, note, createdBy, doc |
+| eddy_categories   | Library category  | name, role (intro, outro, bed, sfx, disclaimer...), sort |
+| eddy_assets       | Library sound     | id = audio SHA-256, name, categoryId, role, tags, dur, product |
+| eddy_guidelines   | Editing guideline | name, text, default |
+| eddy_users        | User account      | id = username, name, role (admin/editor), passHash (scrypt), disabled, createdBy |
+
+Cloud Storage layout (bucket <project>-eddy-audio)
+- audio/<sha256>                     every audio file (episode, library sound, final mix), stored once
+- uploads/<uploadId>/<part>          temporary parts of large uploads, joined then deleted;
+                                     a lifecycle rule clears leftovers after 1 day
+- exports/<projectId>/<time>-<name>.mp3   final mixes saved for the pipeline
+
+Configuration and secrets (environment variables only; full list in .env.example)
+
+| Variable                                            | Kind             | Purpose |
+|-----------------------------------------------------|------------------|---------|
+| ADMIN_PASSWORD                                      | Secret           | Password of the built-in "admin" account, used to create it the first time (8+ characters) |
+| SESSION_SECRET                                      | Secret           | Signs session cookies (random, 32+ characters) |
+| PIPELINE_TOKEN                                      | Secret           | Bearer token for /api/pipeline/*; also signs callbacks |
+| GEMINI_API_KEY, OPENAI_API_KEY                      | Secret, optional | Without a Gemini key, Gemini runs on Vertex AI with the service account |
+| EDDY_STORAGE, EDDY_BUCKET                           | Setting          | gcp, with the bucket name |
+| GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION         | Setting          | Project and Vertex AI region |
+| FIRESTORE_DATABASE, FIRESTORE_PREFIX                | Setting          | Default (default) and eddy_ |
+| TRUST_PROXY_HOPS                                    | Setting          | 1 on Cloud Run, 2 behind API Gateway |
+| ALLOWED_AUDIO_HOSTS, PIPELINE_CALLBACK_URL, DRIVE_FOLDER_ID | Setting, optional | Pipeline hand-off |
+| GEMINI_MODEL(S), OPENAI_MODEL(S), AI_DAILY_LIMIT    | Setting, optional | AI model choice and limit (default 60 per person per day) |
+
+
+3. FUNCTIONAL REQUIREMENTS
+--------------------------
+"Verified by": A = automated test (suite and test name), E2E = browser test step,
+UAT = manual check in the deployed app. Record Pass/Fail in the Sign-off column.
+
+FR-01  User sign-in
+  Criteria: Each person signs in with their own username (not case sensitive) and
+            password. A wrong username or password is refused. After 10 wrong attempts
+            from one address, sign-in is blocked for 15 minutes. A session lasts 7 days.
+            Sign out ends it. Every API call without a session gets 401. A disabled or
+            removed account is signed out within 30 seconds and cannot sign in.
+            Everyone can change their own password (Change password, top right).
+  Verified by: A: server.test.ts > user accounts (8 tests). E2E steps 2 and 12.
+  Sign-off: ____
+
+FR-02  Folders
+  Criteria: Create, rename and nest folders; move by menu or drag and drop. A folder
+            cannot go inside itself. Deleting a folder deletes its sub-folders,
+            projects and versions.
+  Verified by: A: projects, folders and versions. E2E step 4. UAT: drag a project into a folder.
+  Sign-off: ____
+
+FR-03  Projects
+  Criteria: Create, rename, move, duplicate and delete projects. Search by project,
+            product or folder. Sort by last edited, name or created. The list loads
+            without the edit data.
+  Verified by: A: lists projects without their edit data. UAT: search and sort.
+  Sign-off: ____
+
+FR-04  Autosave and version history
+  Criteria: Edits autosave ("All changes saved"). Save version (button or Ctrl+S)
+            stores a numbered version with a note, author and time. History lists
+            versions newest first; two can be compared; any can be restored (as a new
+            version) or copied as a new project.
+  Verified by: A: creates a project, autosaves and keeps numbered versions. E2E steps 7 and 9. UAT: compare, restore.
+  Sign-off: ____
+
+FR-05  Episode audio import
+  Criteria: Import MP3, WAV or M4A. Files over 8 MB upload in 8 MB parts and are joined
+            in Cloud Storage. Each file is checked by SHA-256 and stored once. Audio
+            streams back with HTTP range requests.
+  Verified by: A: audio storage (3 tests). E2E step 5 (26 MB, 4 parts).
+  Sign-off: ____
+
+FR-06  Timeline editor
+  Criteria: Move, trim, split, duplicate and delete clips. Clip volume and fades. Track
+            mute, solo and volume. Music dips under voices. Undo and redo. Zoom and fit.
+            Keyboard shortcuts listed under Keys.
+  Verified by: UAT.
+  Sign-off: ____
+
+FR-07  Playback
+  Criteria: Play, stop, and play from the beginning. Speed 0.5x to 2x in 0.25 steps
+            with natural pitch.
+  Verified by: UAT.
+  Sign-off: ____
+
+FR-08  Script and subtitles
+  Criteria: Paste or load a script in "NAME: line" format; [SFX: ...] tags become cues.
+            Subtitles (.srt, .vtt, ElevenLabs or Whisper JSON) give lines exact times;
+            other lines are lined up with the detected speech.
+  Verified by: A: autoEdit.test.ts > matches every subtitle line exactly. E2E step 10.
+  Sign-off: ____
+
+FR-09  Rules auto-edit
+  Criteria: One click places intro, outro, disclaimers, background music and sound
+            effects by the Bajaj storytelling rules (section 4), keeps clips placed by
+            hand, and shows a report of what it placed and why.
+  Verified by: A: autoEdit.test.ts (12 tests). E2E step 6.
+  Sign-off: ____
+
+FR-10  AI auto-edit
+  Criteria: Pick the AI (Gemini or ChatGPT) and its model before running. The AI writes
+            the cue sheet; the storytelling rules still apply on top. Keys stay on the
+            server. Each person gets 60 AI requests a day (configurable). Without AI,
+            Copy-paste Claude works.
+  Verified by: A: AI providers; API key stays secret; ai.test.ts. UAT with a key.
+  Sign-off: ____
+
+FR-11  Ask AI
+  Criteria: Ask for edits in plain words, or paste exact EDDY EDIT instructions. Fixed
+            disclaimers are never changed.
+  Verified by: A: ai.test.ts > applies ops safely; EDDY EDIT blocks. UAT.
+  Sign-off: ____
+
+FR-12  Audio library
+  Criteria: Categories with roles; upload, rename, tag and delete sounds; tag a sound
+            with a product. On first sign-in the starter library imports itself:
+            24 sounds, 19 categories, 3 guidelines.
+  Verified by: E2E step 3. UAT: upload a sound.
+  Sign-off: ____
+
+FR-13  Guidelines
+  Criteria: Edit guideline text and choose the default. Three presets ship: House style,
+            Bajaj episode style, Bajaj storytelling style.
+  Verified by: UAT.
+  Sign-off: ____
+
+FR-14  Export MP3
+  Criteria: Download the mixed episode as an MP3.
+  Verified by: UAT.
+  Sign-off: ____
+
+FR-15  Save final mix
+  Criteria: Renders the MP3, stores it under exports/<projectId>/, optionally copies it
+            to Google Drive, and POSTs the pipeline callback signed with
+            X-Eddy-Signature. The button then reads "Save final mix again" with the last
+            saved time.
+  Verified by: A: takes the final mix back. E2E step 8.
+  Sign-off: ____
+
+FR-16  Pipeline intake
+  Criteria: POST /api/pipeline/episodes with the pipeline token creates a project from
+            script, audio (URL from an allowed host, or an uploaded hash), subtitles,
+            product and folder path. The auto-edit runs the first time someone opens it.
+            Status and final MP3 can be fetched.
+  Verified by: A: pipeline hand-off (4 tests). E2E step 10.
+  Sign-off: ____
+
+FR-18  User management (admin)
+  Criteria: The "admin" account is created from the ADMIN_PASSWORD secret on first start.
+            Admins see a Users page where they add a user (username, name, password of
+            8+ characters, role Editor or Admin), set a new password, change the role,
+            disable/enable and remove accounts. Editors do not see the Users page and get
+            403 from /api/users. At least one active admin always remains; nobody can
+            remove their own account. Passwords are never shown again after saving.
+  Verified by: A: server.test.ts > user accounts. E2E steps 2 and 12.
+  Sign-off: ____
+
+FR-17  Shared, lasting data
+  Criteria: Everything is stored in Firestore and Cloud Storage, shared by the whole
+            team, and survives reloads, restarts and redeploys. Long episodes (over 1 MB
+            of edit data) save and load intact.
+  Verified by: A: Firestore limits (3 tests), npm run test:gcp. E2E step 9.
+  Sign-off: ____
+
+
+4. EDITING RULES THE AUTO-EDIT MUST FOLLOW
+------------------------------------------
+The rules auto-edit (FR-09) implements the "Bajaj storytelling style". Each rule can be
+checked on the timeline after an auto-edit; most are covered by test/autoEdit.test.ts.
+The full guideline text ships as the "Bajaj storytelling style" preset.
+
+R-01  Fixed disclaimers - The AI disclaimer opens and closes the episode at full volume.
+      The product disclaimer (e.g. Home Loan) plays just before the closing AI disclaimer.
+      Test: closes with the product disclaimer and then the AI disclaimer.
+R-02  Intro - After the opening disclaimer, the intro music plays at full volume for
+      2.5 s, then fades out over 1.5 s. Voices start at 2.5 s.
+      Test: opens with the AI disclaimer, then 2.5 s of intro at full volume.
+R-03  One music at a time - Two background music clips never overlap. When a new one
+      starts, the previous one stops.
+      Test: never plays two background music clips at the same time.
+R-04  Music level - All background music (story rewrite, story play, guest, curiosity,
+      caution, product music, intro under the CTA) is at -10 dB and dips under voices.
+      SFX around -6 dB.
+      Test: background music sits at -10 dB.
+R-05  Story rewrite - "story rewrite" runs from 2 s after the intro under the hosts'
+      setup and general talk, and fills any stretch with no other music until the
+      outro (no silence).
+      Test: covered by R-03 and R-04 tests; UAT.
+R-06  Story play - "story play" runs whenever anyone gives valuable information
+      (product, application steps, rates, tax, eligibility, documents) and whenever a
+      Bajaj product is introduced (mandatory).
+      Test: uses story play when the Bajaj home loan is introduced.
+R-07  Curiosity - Questions or doubts from anyone get "Unfolding Insights" (Curiosity
+      category) underneath.
+      Test: ...and Unfolding Insights under questions.
+R-08  Guest - The guest's own lines (not questions) get Guest Warm Acoustic. When the
+      guest is welcomed, "Character Intro - Warm Keys" plays just after that line;
+      no drumroll.
+      Test: plays Character Intro - Warm Keys when the guest is welcomed.
+R-09  Coin Chime (mandatory) - Every mention of low, lower, competitive or attractive
+      interest rates gets a Coin Chime right after the phrase, even next to other SFX.
+      Savings mentions also get one, at least 12 s apart.
+      Test: puts a coin chime on the competitive interest rate line.
+R-10  Acknowledgement - When the guest says they understand ("Now I am clear"), Harp
+      Glide plays softly just after.
+      Test: a harp glide plays when the guest acknowledges.
+R-11  Call to action - When the CTA begins, the intro music plays again lightly under
+      the whole CTA, with no other music; the outro follows.
+      Test: plays the intro music again lightly under the CTA.
+R-12  Outro - Warm Close enters about 2 s before the last line ends and plays 7 s,
+      fading out.  Test: UAT.
+R-13  Numbers and caution - A soft Marimba Pop may follow a key number (at most 3 per
+      episode). Caution lines (tax, fines, penalties, charges) get no SFX.  Test: UAT.
+R-14  Avoid - No risers, stingers, swells, whistles, beeps or sparkles.  Test: UAT.
+R-15  Manual work is kept - Clips placed by hand stay when the auto-edit runs again.
+      Test: keeps manually placed clips through a re-run.
+
+GAP FOUND: the starter library has no sound named "Unfolding Insights". Until it is
+uploaded to the Curiosity category, questions fall back to "Curious Pizzicato Strings".
+This is a library item, not a code change: upload the sound in Audio library ->
+Curiosity and R-07 then uses it automatically.
+
+
+5. NON-FUNCTIONAL REQUIREMENTS
+------------------------------
+NFR-01  Secrets never in the repo or the browser
+        Met by: keys only in environment variables (Secret Manager on Cloud Run, .env
+        locally, git-ignored). The build refuses VITE_*KEY/SECRET/TOKEN/PASSCODE
+        variables. API errors are scrubbed of keys.
+        Check: CI step "No secrets in the repository"; test "API key stays secret";
+        inspect the deployed JS bundle for keys.
+NFR-02  Least privilege
+        Met by: service account eddy-run has only Firestore user, Vertex AI user,
+        object admin on the Eddy bucket, and access to its own secrets.
+        Check: gcloud projects get-iam-policy and the bucket IAM.
+NFR-03  Private audio
+        Met by: bucket with public access prevention and uniform access; audio served
+        only through the API to signed-in users or the pipeline.
+        Check: open a storage.googleapis.com object URL -> access denied.
+NFR-04  Request size within Cloud Run / API Gateway limits (32 MB)
+        Met by: uploads in 8 MB parts (up to 64 parts, 512 MB); JSON bodies capped at
+        2 MB (4 MB for pipeline intake).  Check: E2E step 5.
+NFR-05  Firestore limits
+        Met by: edit data and subtitles compressed; every write checked for size
+        (1 MiB), nested lists and reserved names, with a clear 400/413 instead of a crash.
+        Check: A: Firestore limits.
+NFR-06  Brute-force protection
+        Met by: 10 wrong sign-ins per client address per 15 minutes; client address
+        read through TRUST_PROXY_HOPS proxies so it cannot be spoofed.
+        Check: try 11 wrong passwords -> 429.
+NFR-07  Cookies
+        Met by: HttpOnly, Secure in production, SameSite=Lax, HMAC-signed, 7-day expiry.
+        Check: browser devtools > Cookies.
+NFR-08  Health check
+        Met by: GET /api/health returns {ok, storage, ai} without a session. (/healthz
+        also exists but Cloud Run reserves it.)  Check: curl <URL>/api/health
+NFR-09  Scale and cost
+        Met by: Cloud Run 1 vCPU, 1 GiB, 0 to 4 instances, 40 requests per instance,
+        900 s timeout; scales to zero when idle.  Check: Cloud Run service settings.
+NFR-10  Stateless server
+        Met by: uploads, sessions and data live in Cloud Storage, cookies and Firestore.
+        The sign-in limiter and AI daily count are per instance (see limitations).
+        Check: run with 2+ instances; E2E still passes.
+NFR-11  Browser support
+        Met by: current Chrome and Edge (Web Audio, OfflineAudioContext, Cache Storage).
+        Desktop layout.  Check: UAT.
+NFR-13  Passwords stored safely
+        Met by: passwords are stored only as salted scrypt hashes in Firestore (eddy_users);
+        API responses never include them; the admin password lives in Secret Manager.
+        Check: Firestore console > eddy_users shows passHash only; GET /api/users has no hashes.
+NFR-12  No source code published
+        Met by: production build ships without source maps, and any missing file returns
+        404 (not the app page).  Check: curl <URL>/assets/x.js.map -> 404.
+
+
+6. API REFERENCE
+----------------
+All endpoints are under /api and return JSON. Team endpoints need the session cookie
+from POST /api/session; pipeline endpoints need "Authorization: Bearer <PIPELINE_TOKEN>".
+Errors come back as {"error": "<message>"} with a 4xx or 5xx status.
+
+| Area          | Endpoints                                                                  | Auth |
+|---------------|----------------------------------------------------------------------------|------|
+| Health        | GET /api/health                                                            | None |
+| Session       | GET, POST {username, password}, DELETE /api/session                        | None for POST |
+| Users         | GET, POST /api/users; PATCH, DELETE /api/users/:username                   | Admin |
+| Own password  | POST /api/me/password {current, next}                                      | Team |
+| Folders       | GET, POST /api/folders; PATCH, DELETE /api/folders/:id                     | Team |
+| Projects      | GET, POST /api/projects; GET, PATCH, DELETE /api/projects/:id; PUT /api/projects/:id/draft | Team |
+| Versions      | GET, POST /api/projects/:id/versions; GET /api/versions/:id                | Team |
+| Library       | GET /api/categories, PUT/DELETE /api/categories/:id; GET /api/assets, PUT/PATCH/DELETE /api/assets/:hash; GET /api/guidelines, PUT /api/guidelines/:id | Team |
+| Audio         | HEAD, GET (range), PUT /api/audio/:sha256 (up to 8 MB)                     | Team or pipeline |
+| Large uploads | POST /api/uploads {hash, parts} -> PUT /api/uploads/:id/:n -> POST /api/uploads/:id/complete | Team or pipeline |
+| AI            | GET /api/ai (providers and models); POST /api/ai {prompt, provider, model} | Team |
+| Final mix     | POST /api/projects/:id/final {hash, filename}                              | Team |
+| Pipeline      | POST /api/pipeline/episodes; GET /api/pipeline/episodes/:id; GET /api/pipeline/episodes/:id/final | Pipeline |
+
+Pipeline hand-off contract
+1. Pipeline -> Eddy. Upload the audio first (or send audioUrl from a host in
+   ALLOWED_AUDIO_HOSTS), then create the episode:
+
+     POST /api/pipeline/episodes
+     Authorization: Bearer <PIPELINE_TOKEN>
+     Content-Type: application/json
+
+     {"title": "Home loan for parents", "folder": "Home Loan/Season 1", "product": "Home Loan",
+      "script": "SHWETA: Welcome...\nKARAN: ...", "subtitles": "1\n00:00:00,000 --> ...",
+      "audioUrl": "https://<wondercraft host>/...mp3", "externalId": "wondercraft-episode-id"}
+
+     -> 201 {"projectId": "...", "editorPath": "/#/p/<projectId>", "audioHash": "..."}
+
+2. An editor opens <URL>/#/p/<projectId>; the rules auto-edit runs once, automatically.
+3. Eddy -> pipeline. Save final mix stores the MP3 under exports/<projectId>/, copies it
+   to Drive if DRIVE_FOLDER_ID is set, and POSTs PIPELINE_CALLBACK_URL with
+   {"event": "final_mix_ready", ...} and header
+   X-Eddy-Signature: sha256=<HMAC-SHA256 of the body with PIPELINE_TOKEN>.
+4. The pipeline can also poll GET /api/pipeline/episodes/:id (status: editing or final)
+   and download GET /api/pipeline/episodes/:id/final.
+
+Limits: script up to about 1 MB of text, subtitles up to about 2 MB, request body 4 MB.
+
+
+7. TEST PLAN
+------------
+Three automated suites run in CI on every push; the browser test can also run against
+the deployed site. A short manual UAT covers what automation cannot judge: how the edit
+sounds and how the editor feels.
+
+| Suite                          | Command                                         | Covers | FRs |
+|--------------------------------|-------------------------------------------------|--------|-----|
+| Unit and API (local storage)   | npm test                                        | Rules engine, AI reply handling, every API route, Firestore limits, .env reading | FR-01-05, 08-11, 15-17, R-01-15 |
+| API on Google Cloud services   | npm run test:gcp (needs: pip install gcp-storage-emulator) | Same API tests against Firestore and Cloud Storage emulators | FR-01-05, 15-17 |
+| Browser, production build      | npm run build && npm run e2e:gcp (emulators), or npm run e2e:remote (deployed site) | The whole user journey below, in Chromium | FR-01-05, 08-09, 12, 15-17 |
+
+Browser test steps (test/e2e/gcp-e2e.mjs)
+ 1. Health check passes; missing files and source maps return 404.
+ 2. A wrong password is refused. Admin signs in, adds a test editor on the Users page,
+    signs out; the editor signs in and has no Users page or /api/users access.
+ 3. The starter library is present: 24 sounds, 19 categories, 3 guidelines.
+ 4. Creates an "E2E test <time>" folder and a project inside it; the editor opens.
+ 5. Uploads a 26 MB episode in 4 parts; checks SHA-256 and a range read.
+ 6. Pastes a 10-line script and runs the rules auto-edit (11 sounds placed).
+ 7. Saves version 1 with a note; checks the clips and cues are in Firestore.
+ 8. Saves the final mix; the pipeline sees status "final" and downloads the MP3.
+ 9. Reloads; the project, audio and version history load again.
+10. Sends a pipeline episode with subtitles into a sub-folder; opening it runs the auto-edit.
+11. Deletes the test folder with its projects (skip with KEEP=1), then signs out.
+12. Admin signs back in and removes the test editor, who can then no longer sign in.
+
+Last results: CI green on the v3 branch; locally 46 unit/API tests, 29 API tests on the
+emulators, and 3 consecutive passing browser runs on the container build.
+
+Manual UAT on the deployed site (about 20 minutes, one editor)
+[ ] Import a real Wondercraft episode and its script; run Auto-edit (Rules).
+[ ] Listen through: intro 2.5 s then voices (R-02), never two music tracks at once
+    (R-03), Coin Chime after each low-interest mention (R-09), intro music under the CTA
+    (R-11), outro (R-12), disclaimers at both ends (R-01).
+[ ] Move, trim, split and delete a clip; undo and redo (FR-06).
+[ ] Try speeds 0.5x and 2x, then play from the beginning (FR-07).
+[ ] Save a version, change something, compare the two, restore the first (FR-04).
+[ ] Export MP3 and play the file (FR-14).
+[ ] Edit a guideline and set it as default (FR-13).
+[ ] With a Gemini or OpenAI key set: pick the model, run AI auto-edit and Ask AI (FR-10, FR-11).
+[ ] Upload a sound to the library and use it from Sounds (FR-12).
+[ ] Open the same project from a second browser and confirm it matches (FR-17).
+[ ] As admin, add a user, sign in as them, change their password, disable them (FR-18).
+
+
+8. DEPLOYMENT RUNBOOK
+---------------------
+One script, scripts/deploy-gcp.sh, sets up every Google Cloud resource and deploys. It is
+safe to run again: it creates only what is missing, then deploys a new revision. Secret
+values are never printed or written to disk.
+
+Before you start
+- The v3 pull request is reviewed and merged (deploy from main after merge, or from v3
+  for a test deploy).
+- You are Owner or Editor on cobalt-mind-422108, and billing is on.
+- Use Cloud Shell (it has gcloud, Node and git), or any machine with gcloud signed in.
+- Decide: public URL with the sign-in page (PUBLIC=yes, default) or behind API Gateway
+  only (PUBLIC=no, TRUST_PROXY_HOPS=2). If an org policy blocks allUsers on Cloud Run,
+  use API Gateway or ask for an exception.
+
+Deploy
+    git clone https://github.com/N1shant007/Eddy-google.git && cd Eddy-google
+    git checkout main            # or v3 before the merge
+    PROJECT=cobalt-mind-422108 ./scripts/deploy-gcp.sh
+
+It asks for the admin password on the first run (the password of the built-in "admin"
+account; Nishant shares it separately), or pass it as ADMIN_PASSWORD=... in front. Optional settings go in front of the
+command, e.g. GEMINI_API_KEY=... OPENAI_API_KEY=... ALLOWED_AUDIO_HOSTS=<wondercraft cdn host>
+PIPELINE_CALLBACK_URL=... DRIVE_FOLDER_ID=... FIRESTORE_LOCATION=asia-south1
+
+What the script does
+ 1. Enables Cloud Run, Cloud Build, Artifact Registry, Firestore, Cloud Storage,
+    Secret Manager, Vertex AI and IAM APIs.
+ 2. Creates the Firestore database (default) in Native mode (location nam5 unless
+    FIRESTORE_LOCATION is set) if it does not exist.
+ 3. Creates the private bucket <project>-eddy-audio in us-central1, with a rule that
+    clears unfinished uploads after 1 day.
+ 4. Creates the service account eddy-run and grants Firestore user, Vertex AI user and
+    object admin on the bucket; lets Cloud Build build from source.
+ 5. Creates the secrets eddy-admin-password, eddy-session-secret, eddy-pipeline-token (and the
+    AI keys if given) and lets eddy-run read them.
+ 6. Builds the Dockerfile with Cloud Build and deploys the Cloud Run service eddy
+    (1 vCPU, 1 GiB, 0-4 instances, 900 s timeout).
+ 7. Calls /api/health until it answers and prints the URL and next steps.
+
+After the deploy
+ 1. Run the browser test against the live site (creates and then deletes its own
+    "E2E test" folder):
+        npm ci && npm i --no-save playwright && npx playwright install --with-deps chromium
+        export BASE=<service URL>
+        export ADMIN_PASSWORD=$(gcloud secrets versions access latest --secret=eddy-admin-password)
+        export PIPELINE_TOKEN=$(gcloud secrets versions access latest --secret=eddy-pipeline-token)
+        npm run e2e:remote
+ 2. Sign in as admin in a browser: the starter library imports itself. Then open Users
+    and add an account for each team member (share each password privately).
+ 3. Do the manual UAT in the test plan and record each FR's sign-off.
+ 4. Give the pipeline team the service URL and the pipeline token (from Secret Manager),
+    and set ALLOWED_AUDIO_HOSTS to Wondercraft's file host.
+
+Day-2 operations
+| Task                    | How |
+|-------------------------|-----|
+| Ship a new version      | Merge to main, then re-run the script |
+| Add or remove people    | Users page (admins only) |
+| Change a password       | Users page > Set password (admins), or Change password (everyone, own account) |
+| Lost admin password     | Another admin resets it on the Users page. If no admin can sign in: delete the document eddy_users/admin in the Firestore console, add a new eddy-admin-password version, re-run the script |
+| Sign everyone out       | Add a new eddy-session-secret version, then re-run the script |
+| Add or change an AI key | GEMINI_API_KEY=... or OPENAI_API_KEY=... in front of the script |
+| Roll back               | gcloud run services update-traffic eddy --region us-central1 --to-revisions=<previous revision>=100 |
+| Logs                    | gcloud run services logs read eddy --region us-central1 |
+| Backups                 | Recommended: Firestore point-in-time recovery and a daily scheduled backup; bucket object versioning if final mixes must be recoverable |
+
+
+9. KNOWN LIMITATIONS AND OPEN DECISIONS
+---------------------------------------
+Limitations (by design for v3)
+- No Google sign-in / SSO and no password reset by email: admins set and reset passwords
+  on the Users page and share them privately.
+- The sign-in lockout and the AI daily limit are counted per Cloud Run instance, so with
+  several instances the real limits are a little higher.
+- The mix is rendered and encoded in the browser. A long episode takes a minute or so on
+  an ordinary laptop, and the tab must stay open until "Save final mix" finishes.
+- Two people editing the same project at once: the last autosave wins. Version history
+  keeps both if each saves a version.
+- Tests ran against Firestore and Cloud Storage emulators, not a real project.
+  npm run e2e:remote after the first deploy closes that gap.
+- Audio deleted from the library stays in the bucket (files are shared by hash and may be
+  used by other projects).
+
+Decisions for DevOps
+[ ] Public Cloud Run URL with the sign-in page, or API Gateway in front
+    (PUBLIC=no, TRUST_PROXY_HOPS=2)?
+[ ] Custom domain (Cloud Run domain mapping or a load balancer)?
+[ ] Firestore location: nam5 (multi-region US, default) or a single region such as
+    asia-south1 (Mumbai)? It cannot be changed after the database is created.
+[ ] Turn on Firestore point-in-time recovery and daily backups.
+[ ] Wondercraft's file host for ALLOWED_AUDIO_HOSTS, and the pipeline callback URL.
+[ ] Upload the "Unfolding Insights" sound to the Curiosity category (see section 4 gap).
+[ ] Gemini through Vertex AI with the service account (no key), or an API key?

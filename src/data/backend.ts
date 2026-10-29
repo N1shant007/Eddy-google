@@ -1,11 +1,19 @@
 import { ApiBackend } from './api';
 import { DemoBackend } from './demoBackend';
-import type { Backend, UserInfo } from './types';
+import type { Account, Backend, UserInfo } from './types';
 
 /** what the app needs from storage: the Backend interface plus sign-in and the pipeline hand-off */
 export interface EddyBackend extends Backend {
   readonly demo?: boolean;
-  signIn(passcode: string, name: string): Promise<UserInfo>;
+  signIn(username: string, password: string): Promise<UserInfo>;
+  /** user accounts (the server only; the browser demo has a single built-in user) */
+  accounts?: {
+    list(): Promise<Account[]>;
+    add(a: { username: string; name: string; password: string; role: 'admin' | 'editor' }): Promise<Account>;
+    update(username: string, patch: Partial<{ name: string; password: string; role: 'admin' | 'editor'; disabled: boolean }>): Promise<Account>;
+    remove(username: string): Promise<void>;
+    changeOwnPassword(current: string, next: string): Promise<void>;
+  };
   signOut(): Promise<void>;
   markAutoEdited(id: string): Promise<void>;
   putAudio(file: Blob, onProgress?: (p: number) => void): Promise<string>;

@@ -27,12 +27,12 @@ const py = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'pyt
 const kids = [spawn(py, ['-m', 'gcp_storage_emulator', 'start', '--host=127.0.0.1', `--port=${gcsPort}`, '--in-memory', '--default-bucket=eddy-e2e'], { stdio: 'ignore' })];
 await waitFor(`http://127.0.0.1:${gcsPort}/storage/v1/b`, 'Cloud Storage emulator (pip install gcp-storage-emulator)');
 
-const PASSCODE = 'e2e-' + randomBytes(6).toString('hex'), PIPELINE_TOKEN = randomBytes(24).toString('hex');
+const ADMIN_PASSWORD = 'e2e-' + randomBytes(9).toString('hex'), PIPELINE_TOKEN = randomBytes(24).toString('hex');
 const app = spawn(process.execPath, ['dist-server/server.js', '--production'], {
   cwd: APP_DIR,
   env: { ...process.env, NODE_ENV: 'production', PORT: String(appPort), EDDY_STORAGE: 'gcp', EDDY_BUCKET: 'eddy-e2e', GOOGLE_CLOUD_PROJECT: 'eddy-emulator', EDDY_AI: 'off',
     FIRESTORE_EMULATOR_HOST: `127.0.0.1:${fsPort}`, STORAGE_EMULATOR_HOST: `http://127.0.0.1:${gcsPort}`,
-    EDDY_PASSCODE: PASSCODE, SESSION_SECRET: randomBytes(32).toString('hex'), PIPELINE_TOKEN },
+    ADMIN_PASSWORD, SESSION_SECRET: randomBytes(32).toString('hex'), PIPELINE_TOKEN },
   stdio: ['ignore', 'inherit', 'inherit'],
 });
 kids.push(app);
@@ -41,7 +41,7 @@ process.on('exit', stop);
 await waitFor(`http://localhost:${appPort}/api/health`, 'Eddy');
 
 const t = spawn(process.execPath, ['test/e2e/gcp-e2e.mjs'], {
-  env: { ...process.env, BASE: `http://localhost:${appPort}`, PASSCODE, PIPELINE_TOKEN, SHOTS: process.env.SHOTS || work },
+  env: { ...process.env, BASE: `http://localhost:${appPort}`, ADMIN_PASSWORD, PIPELINE_TOKEN, SHOTS: process.env.SHOTS || work },
   stdio: 'inherit',
 });
 t.on('exit', (code) => { console.log(`Screenshots: ${process.env.SHOTS || work}`); stop(); process.exit(code ?? 1); });

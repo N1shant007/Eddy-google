@@ -58,6 +58,19 @@ export interface UserInfo {
   id: string;
   email: string;
   name: string;
+  /** sign-in name; admins can manage users */
+  username?: string;
+  role?: 'admin' | 'editor';
+}
+
+export interface Account {
+  username: string;
+  name: string;
+  role: 'admin' | 'editor';
+  disabled: boolean;
+  createdAt: string;
+  createdBy: string | null;
+  updatedAt: string | null;
 }
 
 /** Storage interface. Implemented by ApiBackend (the Eddy server: Firestore, Cloud Storage, Gemini). */

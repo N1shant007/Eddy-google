@@ -5,7 +5,7 @@ import { importStarterLibrary } from '../data/seed';
 import type { EddyBackend } from '../data/backend';
 import type { Folder, ProjectMeta, UserInfo } from '../data/types';
 
-export type View = 'projects' | 'editor' | 'library' | 'guidelines';
+export type View = 'projects' | 'editor' | 'library' | 'guidelines' | 'users';
 
 interface Toast { id: number; text: string; kind?: 'error' | 'ok' }
 
@@ -54,12 +54,12 @@ export const useApp = create<AppState>((set, get) => ({
   libraryImport: null,
 
   async signedIn(user) {
-    set({ user });
+    // a link straight to a project (#/p/<id>, e.g. from the pipeline) opens it; decided now, so a page the
+    // person picks while the lists load is not overridden afterwards
+    const m = location.hash.match(/^#\/p\/(.+)$/);
+    set({ user, ...(m ? { openProjectId: m[1], view: 'editor' as View } : {}) });
     await Promise.all([get().refresh(), get().refreshLibrary()]);
     void get().ensureLibrary();
-    // a link straight to a project (#/p/<id>, e.g. from the pipeline) opens it after sign-in
-    const m = location.hash.match(/^#\/p\/(.+)$/);
-    if (m) set({ openProjectId: m[1], view: 'editor' });
   },
   async init() {
     const user = await get().be.user();
@@ -71,8 +71,10 @@ export const useApp = create<AppState>((set, get) => ({
     set({ ready: true });
   },
   async ensureLibrary() {
-    const { assets, categories, be, libraryImport } = get();
-    if (libraryImport || assets.length || categories.length) return;
+    const { guidelines, be, libraryImport } = get();
+    // the guidelines are saved last, so none means the import never ran or was cut short (e.g. a sign-out
+    // mid-way): run it again; it skips whatever is already there
+    if (libraryImport || guidelines.length) return;
     set({ libraryImport: 'Importing the audio library…' });
     try {
       await importStarterLibrary(be, (d, t, name) => set({ libraryImport: name ? `Importing the audio library: ${name} (${d + 1}/${t})` : null }));
@@ -84,7 +86,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
   setView(view) {
     set({ view });
-    if (view !== 'editor') history.replaceState(null, '', location.pathname);
+    if (view !== 'editor') history.replaceState(null, '', location.pathname.replace(/\/{2,}/g, '/') + location.search); // '//' would read as another host
   },
   async refresh() {
     const be = get().be;

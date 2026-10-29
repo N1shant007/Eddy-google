@@ -32,14 +32,14 @@ try {
     @(
       '# Local settings for Eddy. This file is private: it is git-ignored and never uploaded.',
       'EDDY_STORAGE=local',
-      'EDDY_PASSCODE=eddy-local',
+      'ADMIN_PASSWORD=eddy-local-admin',
       "SESSION_SECRET=$secret",
       'PORT=8080',
       '# Paste API keys here to try the AI edit (optional):',
       'GEMINI_API_KEY=',
       'OPENAI_API_KEY='
     ) | Set-Content -Encoding ASCII "$AppDir\.env"
-    Write-Host "Created .env (passcode: eddy-local)"
+    Write-Host "Created .env (sign in as admin / eddy-local-admin)"
   } else { Write-Host ".env already exists; left as it is" }
 
   Write-Host "== 4/5 Tests" -ForegroundColor Cyan
@@ -72,4 +72,4 @@ finally {
   Stop-Transcript | Out-Null
 }
 Write-Host ""
-Write-Host "Done. Open http://localhost:8080 and sign in with the passcode in .env (eddy-local)." -ForegroundColor Green
+Write-Host "Done. Open http://localhost:8080 and sign in as admin with the password in .env (ADMIN_PASSWORD)." -ForegroundColor Green

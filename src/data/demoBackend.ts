@@ -29,13 +29,14 @@ export class DemoBackend implements Backend {
   }
 
   async user(): Promise<UserInfo | null> {
-    try { const n = sessionStorage.getItem('eddy.demo.user'); return n ? { id: n, email: '', name: n } : null; } catch { return null; }
+    try { const n = sessionStorage.getItem('eddy.demo.user'); return n ? { id: n, email: '', name: n, username: n, role: 'editor' } : null; } catch { return null; }
   }
-  async signIn(passcode: string, name: string): Promise<UserInfo> {
-    if (passcode.trim().toLowerCase() !== 'demo') throw new Error('That passcode is not right. In this demo the passcode is “demo”.');
-    const n = name.trim() || 'Team member';
+  /** demo: any username, password "demo" (user accounts live on the server) */
+  async signIn(username: string, password: string): Promise<UserInfo> {
+    if (password.trim().toLowerCase() !== 'demo') throw new Error('That password is not right. In this demo the password is “demo”.');
+    const n = username.trim() || 'demo';
     try { sessionStorage.setItem('eddy.demo.user', n); } catch { /* ignore */ }
-    return { id: n, email: '', name: n };
+    return { id: n, email: '', name: n, username: n, role: 'editor' };
   }
   async signOut() { try { sessionStorage.removeItem('eddy.demo.user'); } catch { /* ignore */ } }
   async markAutoEdited(_id: string) { /* demo projects don't come from the pipeline */ }

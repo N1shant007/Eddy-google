@@ -53,6 +53,9 @@ export function EditorView({ projectId }: { projectId: string }) {
         // first open of an episode from the pipeline: build the edit straight away
         if (alive && pipeline?.autoEditPending && draft.dialogueHash) {
           const rep = await autoEditFromPipeline(pipeline.subtitles);
+          // save the edit first, then mark it done: closing the tab right away must not lose it
+          const st = useEditor.getState();
+          await be.saveDraft(projectId, st.doc, projectEnd(st.doc));
           await be.markAutoEdited(projectId).catch(() => {});
           setPipe({ ...pipeline, autoEditPending: false });
           toast(`Edit built from the pipeline’s script${pipeline.subtitles ? ' and subtitles' : ''}: ${rep.placed} sounds placed. Review it, then Save final mix.`, 'ok', 7000);

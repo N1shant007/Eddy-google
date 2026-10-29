@@ -4,10 +4,10 @@ import { Firestore } from '@google-cloud/firestore';
 import { config } from './config.js';
 
 /* A tiny document store: Firestore in production, JSON files in ./.data for local development.
-   Collections: folders, projects, versions, categories, assets, guidelines (names get FIRESTORE_PREFIX). */
+   Collections: folders, projects, versions, categories, assets, guidelines, users (names get FIRESTORE_PREFIX). */
 
 export type Doc = Record<string, any> & { id: string };
-export type Col = 'folders' | 'projects' | 'versions' | 'categories' | 'assets' | 'guidelines';
+export type Col = 'folders' | 'projects' | 'versions' | 'categories' | 'assets' | 'guidelines' | 'users';
 
 export interface Store {
   list(col: Col, opts?: { where?: [string, any]; select?: string[] }): Promise<Doc[]>;
