@@ -73,6 +73,11 @@ Safeguards in this repo:
 
 ## Deploy to Google Cloud
 
+Full documentation, functional requirements with acceptance tests, and the deployment runbook:
+[`docs/Eddy-v3-Documentation-and-Requirements.txt`](docs/Eddy-v3-Documentation-and-Requirements.txt).
+The team passcode is a secret: give it to the deploy script when asked (or as `EDDY_PASSCODE=…`); it is stored only in Secret Manager.
+
+
 One script sets up everything and deploys: Firestore (Native mode), a private Cloud Storage bucket, a service account
 with only the roles Eddy needs, Secret Manager secrets, and a Cloud Run service built from this repo's `Dockerfile`.
 It is safe to run again (it creates only what is missing, then deploys a new revision).
