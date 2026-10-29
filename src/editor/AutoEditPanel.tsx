@@ -13,10 +13,12 @@ import { IMagic, IUpload } from '../ui/icons';
 import { fmtTime } from './layout';
 
 type Engine = 'rules' | 'team' | 'paste';
-export const activeGuidelineText = () => {
+/** the guideline this project uses: its own choice, else the team default (Guidelines page) */
+export const activeGuideline = (guidelineId?: string | null) => {
   const g = useApp.getState().guidelines;
-  return (g.find((x) => x.isDefault) || g[0])?.text || '';
+  return g.find((x) => x.id === guidelineId) || g.find((x) => x.isDefault) || g[0] || null;
 };
+export const activeGuidelineText = () => activeGuideline(useEditor.getState().doc.guidelineId)?.text || '';
 
 /** Pipeline hand-off: apply the pipeline's subtitles (if any) and run the rules auto-edit, without the panel open. */
 export async function autoEditFromPipeline(subtitles: string | null): Promise<AutoEditReport> {
@@ -169,6 +171,7 @@ export function AutoEditPanel() {
         <input value={doc.settings.hosts} placeholder="e.g. Shweta, Karan" onFocus={() => useEditor.getState().checkpoint()}
           onChange={(e) => edit((d) => { d.settings.hosts = e.target.value; }, false)} />
       </div>
+      <GuidelinePicker />
       <div className="field"><label>Who edits</label></div>
       <div className="seg" role="radiogroup" aria-label="Who edits">
         <button role="radio" aria-checked={eff === 'rules'} className={eff === 'rules' ? 'on' : ''} onClick={() => setEngine('rules')}>Rules (instant)</button>
@@ -209,6 +212,26 @@ export function AutoEditPanel() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** per-project choice of editing guideline; saved with the project and its versions */
+function GuidelinePicker() {
+  const { doc, edit } = useEditor();
+  const guidelines = useApp((s) => s.guidelines);
+  const def = guidelines.find((x) => x.isDefault) || guidelines[0];
+  const chosen = guidelines.find((x) => x.id === doc.guidelineId);
+  if (!guidelines.length) return null;
+  return (
+    <div className="field">
+      <label htmlFor="ae-guideline">Guideline</label>
+      <select id="ae-guideline" value={chosen ? chosen.id : ''} style={{ width: '100%' }}
+        onChange={(e) => { const v = e.target.value || null; edit((d) => { d.guidelineId = v; }); }}>
+        <option value="">Team default{def ? ` (${def.name})` : ''}</option>
+        {guidelines.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+      </select>
+      <p className="hint" style={{ margin: '4px 0 0' }}>AI and Copy-paste Claude follow this guideline. Rules (instant) always applies the Bajaj storytelling rules.</p>
     </div>
   );
 }
