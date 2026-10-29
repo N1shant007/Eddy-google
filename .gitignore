@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-server
+.data
+.env
+.env.*
+!.env.example
+!.env.demo
+*.key.json
+service-account*.json
+dist-demo
+
+setup-log.txt
+setup-result.json

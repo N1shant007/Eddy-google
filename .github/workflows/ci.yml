@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No secrets in the repository
+        run: |
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '\.env\.(example|demo)$'; then echo "A .env file is committed"; exit 1; fi
+          if git grep -nE 'AIza[0-9A-Za-z_-]{35}|sk-(proj-)?[A-Za-z0-9_-]{32,}|-----BEGIN (RSA )?PRIVATE KEY-----|"private_key":' -- . ':!package-lock.json' ':!.github/workflows/ci.yml'; then echo "Something that looks like a key is committed"; exit 1; fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Google Cloud mode (Firestore + Cloud Storage emulators)
+        run: |
+          pip install gcp-storage-emulator
+          npm run test:gcp
+      - name: End to end in a browser (production build, emulators)
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
+          mkdir -p e2e-shots && SHOTS=e2e-shots npm run e2e:gcp
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e-shots

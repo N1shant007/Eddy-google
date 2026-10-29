@@ -1,0 +1,50 @@
+{
+  "name": "eddy-v3",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "description": "Eddy v3: AI podcast editor on GCP (Express + React + Firestore + Cloud Storage + Gemini on Vertex AI)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "vite build && tsc -p tsconfig.server.json",
+    "start": "node dist-server/server.js --production",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
+    "test": "vitest run",
+    "build:demo": "vite build --mode demo",
+    "test:gcp": "node scripts/test-gcp.mjs",
+    "e2e:gcp": "node scripts/e2e-gcp.mjs",
+    "e2e:remote": "node test/e2e/gcp-e2e.mjs"
+  },
+  "dependencies": {
+    "@breezystack/lamejs": "1.2.7",
+    "@google-cloud/firestore": "7.11.1",
+    "@google-cloud/storage": "7.16.0",
+    "@google/genai": "1.5.1",
+    "express": "5.1.0",
+    "google-auth-library": "9.15.1",
+    "idb": "8.0.0",
+    "jszip": "3.10.1",
+    "konva": "9.3.20",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-konva": "19.0.7",
+    "zustand": "5.0.5"
+  },
+  "devDependencies": {
+    "@firestore-emulator/server": "^0.3.15",
+    "@tailwindcss/vite": "4.1.10",
+    "@types/express": "5.0.3",
+    "@types/node": "22.15.30",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "@vitejs/plugin-react": "4.5.2",
+    "tailwindcss": "4.1.10",
+    "tsx": "4.20.3",
+    "typescript": "5.8.3",
+    "vite": "6.3.5",
+    "vitest": "3.2.4"
+  }
+}
