@@ -51,9 +51,11 @@ function findPython() {
 const py = findPython();
 if (!py) die('Python 3 was not found. Install it from https://www.python.org/downloads/ (tick "Add python.exe to PATH") and run this again.');
 if (spawnSync(py, ['-c', 'import gcp_storage_emulator'], { encoding: 'utf8' }).status !== 0) {
-  say('installing the Cloud Storage emulator (pip install gcp-storage-emulator)...');
-  const r = spawnSync(py, ['-m', 'pip', 'install', '--disable-pip-version-check', 'gcp-storage-emulator'], { stdio: 'inherit' });
-  if (r.status !== 0) die('Could not install gcp-storage-emulator with pip.');
+  say('installing the Cloud Storage emulator (pip install --user gcp-storage-emulator)...');
+  // --user: works without admin rights (e.g. Python installed in C:\Python312); plain install as a fallback (virtualenv/conda)
+  let r = spawnSync(py, ['-m', 'pip', 'install', '--user', '--disable-pip-version-check', 'gcp-storage-emulator'], { stdio: 'inherit' });
+  if (r.status !== 0) r = spawnSync(py, ['-m', 'pip', 'install', '--disable-pip-version-check', 'gcp-storage-emulator'], { stdio: 'inherit' });
+  if (r.status !== 0 || spawnSync(py, ['-c', 'import gcp_storage_emulator'], { encoding: 'utf8' }).status !== 0) die('Could not install gcp-storage-emulator with pip. Try: python -m pip install --user gcp-storage-emulator');
 }
 const kids = [];
 const gcs = spawn(py, ['-m', 'gcp_storage_emulator', '-d', DATA, 'start', '--host=127.0.0.1', `--port=${GCS_PORT}`, `--default-bucket=${BUCKET}`], { stdio: ['ignore', 'ignore', 'pipe'] });
