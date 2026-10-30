@@ -17,7 +17,8 @@
     "test:gcp": "node scripts/test-gcp.mjs",
     "e2e:gcp": "node scripts/e2e-gcp.mjs",
     "e2e:remote": "node test/e2e/gcp-e2e.mjs",
-    "local:gcp": "node scripts/local-gcp.mjs"
+    "local:gcp": "node scripts/local-gcp.mjs",
+    "build:single": "node scripts/build-single.mjs"
   },
   "dependencies": {
     "@breezystack/lamejs": "1.2.7",
@@ -46,6 +47,7 @@
     "tsx": "4.20.3",
     "typescript": "5.8.3",
     "vite": "6.3.5",
+    "vite-plugin-singlefile": "^2.3.4",
     "vitest": "3.2.4"
   }
 }
