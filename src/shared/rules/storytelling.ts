@@ -1,7 +1,7 @@
 import type { Cue, ScriptLine } from './types';
 import {
   ACK_RE, BENEFIT_RE, BRAND_RE, CAUTION_NOT, CAUTION_RE, CTA_RE, GUEST_RE, INSIGHT_MOOD, INSIGHT_RE, INTEREST_RE,
-  MOOD_MAP, NUMBER_RE, PRODUCT_RE, QUESTION_RE, SAVINGS_RE, TAKEAWAY_RE, VALUE_RE,
+  MOOD_MAP, NO_COST_RE, NUMBER_RE, PRODUCT_RE, QUESTION_RE, SAVINGS_RE, TAKEAWAY_RE, VALUE_RE,
 } from './patterns';
 import { cueId } from './script';
 
@@ -90,59 +90,39 @@ function fracAfter(text: string, m: RegExpMatchArray) {
 
 const mk = (o: Partial<Cue>): Cue => ({ id: cueId(), on: true, type: 'sfx', sound: '', line: 0, position: 'after', source: 'rule', ...o });
 
-/** sound effects: key numbers, guest intro, coin chime (low interest = mandatory), harp glide, takeaways */
-export function withAccents(lines: ScriptLine[], hosts: Set<string>, cues: Cue[]): Cue[] {
+/** Coin Chime is the only sound effect the auto-edit uses (script [SFX: …] tags written by hand still play) */
+export const ONLY_SFX = /coin\s*chime/i;
+const COIN_GAIN = -6;
+const COIN_GAP = 12;
+
+/** Sound effects: Coin Chime only.
+    - after EVERY line that mentions low interest rates (mandatory, always plays)
+    - after lines stating a clear money benefit (no hidden or prepayment charges, low EMI, no pressure on the budget,
+      no financial strain, savings), at least 12 s from any other Coin Chime
+    Each chime sits in the gap after the line, never on a key word, at -6 dB. */
+export function withAccents(lines: ScriptLine[], _hosts: Set<string>, cues: Cue[]): Cue[] {
   if (!lines.length) return cues;
-  const out = [...cues];
-  const busy = (i: number) => out.some((c) => c.on !== false && (c.type === 'sfx' || c.type === 'emotion' || c.type === 'transition') && Math.abs(c.line - i) <= 1);
-  let last = -1e9, n = 0;
-  lines.forEach((l, i) => {
-    if (n >= 3 || i === 0 || busy(i) || t(lines, i) - last < 30) return;
-    const m = (l.text || '').match(NUMBER_RE);
-    if (!m) return;
-    out.push(mk({ sound: 'pop', line: i, reason: `Key number: “${m[0].trim()}”` })); last = t(lines, i); n++;
-  });
-  const gi = lines.findIndex((l, i) => i > 0 && GUEST_RE.test(l.text || ''));
-  if (gi > 0 && !out.some((c) => c.on !== false && /character|drumroll|whoosh/i.test(c.sound || '') && Math.abs(c.line - gi) <= 1)) {
-    for (let j = out.length - 1; j >= 0; j--) { const c = out[j]; if (c.source !== 'tag' && !c.must && (c.type === 'sfx' || c.type === 'emotion') && c.line === gi) out.splice(j, 1); }
-    const m = (lines[gi].text || '').match(GUEST_RE);
-    out.push(mk({ sound: 'character intro warm keys', line: gi, frac: m ? fracAfterWelcome(lines[gi].text, m) : null, gainDb: -10, must: true, reason: 'Guest is introduced: warm character intro' }));
-  }
-  // low interest rates: a Coin Chime on EVERY mention (mandatory, beats other SFX on nearby lines)
+  // other sound effects from the rules or an AI cue sheet are not allowed (hand-written script tags stay)
+  const out = cues.filter((c) => !((c.type === 'sfx' || c.type === 'emotion' || c.type === 'transition') && c.source !== 'tag' && !ONLY_SFX.test(c.sound || '')));
+  const coinAt: number[] = [];
+  const chime = (i: number, reason: string, must: boolean) => {
+    for (let j = out.length - 1; j >= 0; j--) { const c = out[j]; if (c.source !== 'tag' && ONLY_SFX.test(c.sound || '') && c.line === i) out.splice(j, 1); }
+    out.push(mk({ sound: 'coin chime', line: i, position: 'after', gainDb: COIN_GAIN, must, reason }));
+    coinAt.push(t(lines, i));
+  };
+  // low interest rates: always
   lines.forEach((l, i) => {
     const m = (l.text || '').match(INTEREST_RE);
-    if (!m) return;
-    for (let j = out.length - 1; j >= 0; j--) { const c = out[j]; if ((c.type === 'sfx' || c.type === 'emotion' || c.type === 'transition') && c.source !== 'tag' && !c.must && Math.abs(c.line - i) <= 1) out.splice(j, 1); }
-    if (out.some((c) => c.must && c.line === i)) return;
-    out.push(mk({ sound: 'coin chime', line: i, frac: fracAfter(l.text || '', m), must: true, reason: `Low interest rate: “${m[0].trim()}”` }));
+    if (m) chime(i, `Low interest rate: “${m[0].trim()}”`, true);
   });
-  // savings and other money benefits: Coin Chime too, at least 12 s apart
-  let lastC = -1e9;
+  // money benefits: at least 12 s from any Coin Chime
   lines.forEach((l, i) => {
-    if (t(lines, i) - lastC < 12 || out.some((c) => c.must && c.line === i)) return;
+    if (out.some((c) => c.line === i && ONLY_SFX.test(c.sound || '') && c.source !== 'tag')) return;
     const m = (l.text || '').match(BENEFIT_RE);
     if (!m) return;
-    for (let j = out.length - 1; j >= 0; j--) { const c = out[j]; if (c.source === 'rule' && c.type === 'sfx' && /^Engagement beat/.test(c.reason || '') && Math.abs(c.line - i) <= 1) out.splice(j, 1); }
-    if (busy(i)) return;
-    out.push(mk({ sound: 'coin chime', line: i, frac: fracAfter(l.text || '', m), reason: `Savings or money benefit: “${m[0].trim()}”` })); lastC = t(lines, i);
-  });
-  // the guest acknowledges and concludes: Harp Glide, low
-  const N = lines.length;
-  for (let i = N - 1; i >= Math.floor(N * 0.5); i--) {
-    const l = lines[i];
-    if (hosts.has(l.speaker)) continue;
-    const m = (l.text || '').match(ACK_RE);
-    if (!m) continue;
-    for (let j = out.length - 1; j >= 0; j--) { const c = out[j]; if (c.source === 'rule' && !c.must && (c.type === 'sfx' || c.type === 'transition') && Math.abs(c.line - i) <= 1) out.splice(j, 1); }
-    out.push(mk({ type: 'transition', sound: 'harp glide', line: i, gainDb: -16, reason: `Guest acknowledges and concludes: “${m[0].trim()}”` }));
-    break;
-  }
-  n = 0;
-  lines.forEach((l, i) => {
-    if (n >= 2 || i === 0 || i >= lines.length - 1 || busy(i) || !hosts.has(l.speaker)) return;
-    const m = (l.text || '').match(TAKEAWAY_RE);
-    if (!m) return;
-    out.push(mk({ sound: 'ding', line: i, frac: fracAfter(l.text || '', m), reason: `Key takeaway: “${m[0].trim()}”` })); n++;
+    const at = t(lines, i);
+    if (coinAt.some((x) => Math.abs(x - at) < COIN_GAP)) return;
+    chime(i, `Money benefit: “${m[0].trim()}”`, false);
   });
   return out;
 }
@@ -151,7 +131,7 @@ export function withAccents(lines: ScriptLine[], hosts: Set<string>, cues: Cue[]
 export function withCaution(lines: ScriptLine[], cues: Cue[]): Cue[] {
   if (!lines.length) return cues;
   const pI = productIntroLines(lines);
-  const hits = lines.map((l, i) => { const m = (l.text || '').match(CAUTION_RE); return m && !CAUTION_NOT.test(l.text) && !pI.has(i) ? { i, m: m[0] } : null; }).filter(Boolean) as { i: number; m: string }[];
+  const hits = lines.map((l, i) => { const m = (l.text || '').match(CAUTION_RE); return m && !CAUTION_NOT.test(l.text) && !NO_COST_RE.test(l.text) && !pI.has(i) ? { i, m: m[0] } : null; }).filter(Boolean) as { i: number; m: string }[];
   if (!hits.length) return cues;
   const groups: { a: number; b: number; why: string[] }[] = [];
   for (const h of hits) { const g = groups[groups.length - 1]; if (g && h.i - g.b <= 1) { g.b = h.i; g.why.push(h.m); } else groups.push({ a: h.i, b: h.i, why: [h.m] }); }
