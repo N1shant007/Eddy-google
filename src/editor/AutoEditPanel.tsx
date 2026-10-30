@@ -22,13 +22,13 @@ export const activeGuideline = (guidelineId?: string | null) => {
 export const activeGuidelineText = () => activeGuideline(useEditor.getState().doc.guidelineId)?.text || '';
 
 /** Pipeline hand-off: apply the pipeline's subtitles (if any) and run the rules auto-edit, without the panel open. */
-export async function autoEditFromPipeline(subtitles: string | null, guessProductFromScript = true): Promise<AutoEditReport> {
+export async function autoEditFromPipeline(subtitles: string | null): Promise<AutoEditReport> {
   const { assets, categories } = useApp.getState();
   const products = [...new Set([...DEFAULT_PRODUCTS, ...assets.filter((a) => a.role === 'pdisclaimer' && a.product).map((a) => a.product!)])];
   const s = useEditor.getState();
   const h = s.doc.dialogueHash;
   const buf = h ? getBuffer(h) || (await loadBuffer(h)) : null;
-  const c = { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products: guessProductFromScript ? products : [], productDisclaimers: parseProductDisclaimers(activeGuidelineText()) };
+  const c = { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products: useEditor.getState().doc.noProduct ? [] : products, productDisclaimers: parseProductDisclaimers(activeGuidelineText()) };
   let rep!: AutoEditReport;
   s.edit((d) => {
     if (subtitles) {
@@ -101,7 +101,7 @@ export function productChoices(): string[] {
   return all.filter((p) => { const k = norm(p); if (!k || seen.has(k)) return false; seen.add(k); return true; });
 }
 
-/** asks which product the episode is about (its disclaimer plays before the closing AI disclaimer). null = cancelled, '' = no product */
+/** asks which product the episode is about, once, when the episode audio is imported (its disclaimer plays before the closing AI disclaimer). null = cancelled, '' = no product */
 export function askProduct(): Promise<string | null> {
   const d = useEditor.getState().doc;
   const options = productChoices();
@@ -156,16 +156,14 @@ export function AutoEditPanel() {
   const ctx = async () => {
     const h = useEditor.getState().doc.dialogueHash;
     const buf = h ? getBuffer(h) || (await loadBuffer(h)) : null;
-    // the product was just chosen in the product dialog: no guessing from the script (an empty choice means no product)
-    return { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products: [] as string[], productDisclaimers: parseProductDisclaimers(activeGuidelineText()) };
+    // the product chosen on import; with none chosen yet (older projects) it is picked from the script, unless "No product" was chosen
+    const noGuess = !!useEditor.getState().doc.noProduct;
+    return { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products: noGuess ? [] : products, productDisclaimers: parseProductDisclaimers(activeGuidelineText()) };
   };
 
   const run = async () => {
     if (!doc.dialogueHash) { toast('Import the episode audio first (top right).', 'error'); return; }
     if (!assets.length) { toast('The audio library is empty. Import the starter library in Audio library.', 'error', 6000); return; }
-    const product = await askProduct();
-    if (product == null) return;
-    edit((d) => { d.product = product; });
     setBusy(true);
     try {
       // no subtitles yet: let Gemini listen to the episode and time the lines first
@@ -263,8 +261,8 @@ export function AutoEditPanel() {
       )}
       <div className="field">
         <label>Product</label>
-        <input list="eddy-products" value={doc.product} placeholder="Asked before each auto-edit"
-          onFocus={() => useEditor.getState().checkpoint()} onChange={(e) => edit((d) => { d.product = e.target.value; }, false)} />
+        <input list="eddy-products" value={doc.product} placeholder="Chosen when you import the episode audio"
+          onFocus={() => useEditor.getState().checkpoint()} onChange={(e) => edit((d) => { d.product = e.target.value; if (e.target.value.trim()) d.noProduct = false; }, false)} />
         <datalist id="eddy-products">{products.map((p) => <option key={p} value={p} />)}</datalist>
       </div>
       <div className="field">

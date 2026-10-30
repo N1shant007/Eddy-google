@@ -56,7 +56,6 @@ export function EditorView({ projectId }: { projectId: string }) {
         }
         // first open of an episode from the pipeline: build the edit straight away
         if (alive && pipeline?.autoEditPending && draft.dialogueHash) {
-          if (!useEditor.getState().doc.product) { const pr = await askProduct(); if (pr) useEditor.getState().edit((d) => { d.product = pr; }, false); }
           const rep = await autoEditFromPipeline(pipeline.subtitles);
           // save the edit first, then mark it done: closing the tab right away must not lose it
           const st = useEditor.getState();
@@ -222,6 +221,14 @@ export function EditorView({ projectId }: { projectId: string }) {
   };
 
   /* ---------- import main dialogue ---------- */
+  /** the one product question: asked when importing the episode audio, before the file is picked */
+  const chooseProductThenImport = async () => {
+    const product = await askProduct();
+    if (product == null) return;
+    useEditor.getState().edit((d) => { d.product = product; d.noProduct = !product; });
+    fileRef.current?.click();
+  };
+
   const importMain = async (f: File | undefined) => {
     if (!f) return;
     const ctl = { set: (_p: number, _l: string) => {}, close: () => {} };
@@ -244,15 +251,13 @@ export function EditorView({ projectId }: { projectId: string }) {
       // with Gemini on the server: transcribe the episode and build the edit straight away
       const gm = await geminiModel();
       const placed = useEditor.getState().doc.clips.some((c) => c.assetHash !== hash);
-      const product = gm && !placed ? await askProduct() : null;
-      if (gm && !placed && product != null) {
-        useEditor.getState().edit((d) => { d.product = product; });
+      if (gm && !placed) {
         ctl.set(0.96, 'Gemini is listening to the episode and timing every line…');
         let note = '';
         try { note = await transcribeEpisode(gm); }
         catch (e: any) { toast(`${e?.message || e} The auto-edit will time the lines from the speech pauses.`, 'error', 8000); }
         ctl.set(0.99, 'Auto-editing…');
-        const rep = await autoEditFromPipeline(null, false);
+        const rep = await autoEditFromPipeline(null);
         ctl.set(1, 'Done');
         toast(`${note ? note + '. ' : ''}Auto-edit placed ${rep.placed} sounds. Review it, then Save version.`, 'ok', 8000);
       } else {
@@ -357,7 +362,7 @@ export function EditorView({ projectId }: { projectId: string }) {
         {audioProg && <span className="tag" title="The sounds download once; next time they open from this computer">Loading audio {audioProg.done}/{audioProg.total}…</span>}
         <div className="grow" />
         <input ref={fileRef} type="file" accept="audio/*,.mp3,.wav,.m4a" hidden onChange={(e) => { importMain(e.target.files?.[0]); e.target.value = ''; }} />
-        <button className="btn" onClick={() => fileRef.current?.click()}><IUpload /> {hasDialogue ? 'Replace audio' : 'Import episode audio'}</button>
+        <button className="btn" onClick={chooseProductThenImport}><IUpload /> {hasDialogue ? 'Replace audio' : 'Import episode audio'}</button>
         <button className="btn" onClick={() => setHistory((h) => !h)}><IHistory /> History</button>
         <button className="btn" onClick={saveVersion} title="Ctrl+S"><ISave /> Save version</button>
         <button className="btn" onClick={exportMp3} disabled={!ed.doc.clips.length} title="Download the mix to this computer"><IDownload /> Export MP3</button>

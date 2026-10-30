@@ -121,7 +121,12 @@ try {
 
   /* 4. upload a 26 MB episode (4 parts) */
   const buf = readFileSync(AUDIO), hash = createHash('sha256').update(buf).digest('hex');
-  await page.locator('input[type=file][accept^="audio"]').setInputFiles(AUDIO);
+  // Import episode audio asks for the product once, then opens the file picker
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: /Import episode audio/ }).click();
+  await page.locator('#ae-product').selectOption({ label: 'Home Loan' });
+  await page.locator('.modal button[type=submit]', { hasText: 'Continue' }).click();
+  await (await chooser).setFiles(AUDIO);
   let head = 404;
   for (let i = 0; i < 90 && head !== 200; i++) { head = (await page.evaluate((h) => fetch('/api/audio/' + h, { method: 'HEAD' }).then((r) => r.status), hash)); if (head !== 200) await page.waitForTimeout(1000); }
   if (head !== 200) fail('episode audio did not reach Cloud Storage');
@@ -131,20 +136,12 @@ try {
   log(`episode uploaded in ${Math.ceil(buf.length / 8388608)} parts, verified by SHA-256, streams with ranges`);
 
   /* 5. rules auto-edit */
-  // with Gemini on the server, the import asks for the product, then transcribes and auto-edits: answer and wait until it closes
-  const answerProduct = async (timeout) => {
-    const sel = page.locator('#ae-product');
-    if (await sel.waitFor({ timeout }).then(() => true, () => false)) {
-      await sel.selectOption({ label: 'Home Loan' });
-      await page.locator('.modal button[type=submit]', { hasText: 'Continue' }).click();
-    }
-  };
-  await answerProduct(8000);
+  // with Gemini on the server, the import dialog transcribes and auto-edits first: wait until it closes
   await page.locator('.overlay').waitFor({ state: 'detached', timeout: 300000 });
   await page.locator('textarea').first().fill(SCRIPT);
   await page.getByRole('radio', { name: /Rules/ }).click();
   await page.locator('button.btn.primary', { hasText: /^\s*Auto-edit( again)?\s*$/ }).click();
-  await answerProduct(10000); // Eddy asks for the product before every auto-edit
+  if (await page.locator('#ae-product').count()) fail('Auto-edit asked for the product again (it is asked once, on import)');
   await page.getByText(/sounds placed/).waitFor({ timeout: 300000 });
   const report = await page.getByText(/sounds placed/).first().innerText();
   log('auto-edit:', report.replace(/\s+/g, ' '));
