@@ -1,6 +1,6 @@
 EDDY v3 - PROJECT DOCUMENTATION & FUNCTIONAL REQUIREMENTS
 =========================================================
-As of 30 Oct 2026 · Owner: Nishant Hipparagi (Bajaj)
+As of 30 Oct 2026 (rev. 2) · Owner: Nishant Hipparagi (Bajaj)
 Repository: https://github.com/N1shant007/Eddy-google (main; pull request #3 adds the guideline picker and the CTA rule)
 Status: CI green. Deployed to https://eddy-400401080622.us-central1.run.app. Sign-in: user accounts; first account "admin". Target project cobalt-mind-422108, region us-central1.
 
@@ -139,30 +139,40 @@ FR-04  Autosave and version history
   Sign-off: ____
 
 FR-05  Episode audio import
-  Criteria: Import MP3, WAV or M4A. Files over 8 MB upload in 8 MB parts and are joined
-            in Cloud Storage. Each file is checked by SHA-256 and stored once. Audio
-            streams back with HTTP range requests.
-  Verified by: A: audio storage (3 tests). E2E step 5 (26 MB, 4 parts).
+  Criteria: Import MP3, WAV or M4A, with a progress bar showing the upload. Files over 8
+            MB upload in 8 MB parts and are joined in Cloud Storage. Each file is
+            checked by SHA-256 and stored once. Audio streams back with HTTP range
+            requests. With Gemini on the server, importing the episode audio into a
+            project without sounds transcribes it and runs the auto-edit straight away.
+  Verified by: A: audio storage (3 tests). E2E step 5 (26 MB, 4 parts)
   Sign-off: ____
 
 FR-06  Timeline editor
-  Criteria: Move, trim, split, duplicate and delete clips. Clip volume and fades. Track
-            mute, solo and volume. Music dips under voices. Undo and redo. Zoom and fit.
-            Keyboard shortcuts listed under Keys.
-  Verified by: UAT.
+  Criteria: The editor opens at once and shows "Loading audio n/m" while sounds download
+            (episode audio first). Move, trim, split, duplicate and delete clips. Clip
+            volume and fades. Track mute, solo and volume. Music dips under voices. Undo
+            and redo. Zoom and fit. Clear all removes every placed sound (the episode
+            audio and script stay; Ctrl+Z undoes it). Keyboard shortcuts listed under
+            Keys.
+  Verified by: UAT: Clear all, then Ctrl+Z
   Sign-off: ____
 
 FR-07  Playback
-  Criteria: Play, stop, and play from the beginning. Speed 0.5x to 2x in 0.25 steps
-            with natural pitch.
-  Verified by: UAT.
+  Criteria: Play, pause, stop, and play from the beginning; the time readout runs while
+            playing. If sounds are still downloading, Eddy says so and starts as soon as
+            they arrive. Speed 0.5x to 2x in 0.25 steps with natural pitch.
+  Verified by: UAT
   Sign-off: ____
 
-FR-08  Script and subtitles
+FR-08  Script, subtitles and transcription
   Criteria: Paste or load a script in "NAME: line" format; [SFX: ...] tags become cues.
-            Subtitles (.srt, .vtt, ElevenLabs or Whisper JSON) give lines exact times;
-            other lines are lined up with the detected speech.
-  Verified by: A: autoEdit.test.ts > matches every subtitle line exactly. E2E step 10.
+            Subtitles are optional: with Gemini on the server, Auto-edit first lets
+            Gemini listen to the episode and time every line (with a script, the script
+            keeps its wording; without one, the transcript becomes the script).
+            Subtitles (.srt, .vtt, ElevenLabs or Whisper JSON) also give exact times;
+            otherwise lines are lined up with the detected speech.
+  Verified by: A: Gemini transcription (3 tests); autoEdit.test.ts > matches every
+               subtitle line exactly. E2E step 10. UAT: import an episode with no script
   Sign-off: ____
 
 FR-09  Rules auto-edit
@@ -350,6 +360,11 @@ NFR-13  Passwords stored safely
 NFR-12  No source code published
         Met by: production build ships without source maps, and any missing file returns
         404 (not the app page).  Check: curl <URL>/assets/x.js.map -> 404.
+NFR-14  Network drops
+        Met by: requests that get no answer are retried (1 s, 3 s, 6 s); after that the
+        person sees "Can't reach the Eddy server..." instead of "Failed to fetch", and
+        autosave keeps retrying. Audio downloads once and is then kept in the browser.
+        Check: turn Wi-Fi off for 3 s while saving a version -> it still saves.
 
 
 6. API REFERENCE
@@ -371,6 +386,7 @@ Errors come back as {"error": "<message>"} with a 4xx or 5xx status.
 | Audio         | HEAD, GET (range), PUT /api/audio/:sha256 (up to 8 MB)                     | Team or pipeline |
 | Large uploads | POST /api/uploads {hash, parts} -> PUT /api/uploads/:id/:n -> POST /api/uploads/:id/complete | Team or pipeline |
 | AI            | GET /api/ai (providers and models); POST /api/ai {prompt, provider, model} | Team |
+| Transcription | POST /api/transcribe {hash, script?, model?} -> {segments: [{start, end, speaker, text}]} (Gemini) | Team |
 | Final mix     | POST /api/projects/:id/final {hash, filename}                              | Team |
 | Pipeline      | POST /api/pipeline/episodes; GET /api/pipeline/episodes/:id; GET /api/pipeline/episodes/:id/final | Pipeline |
 
