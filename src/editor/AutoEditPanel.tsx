@@ -283,8 +283,8 @@ export function AutoEditPanel() {
       </button>
       <p className="hint" style={{ marginTop: 8 }}>
         {eff === 'rules'
-          ? 'Uses the Bajaj storytelling rules: story play and story rewrite, Unfolding Insights under questions, coin chime on low interest and savings, warm keys for the guest, harp glide, intro music under the CTA, one background music at a time and the disclaimers.'
-          : `${eff === 'team' ? aiLabel : 'Claude'} reads the timed script, the library and your default guidelines and writes the cue sheet; the storytelling rules (coin chime, CTA music, one music at a time, disclaimers) still apply on top.`}
+          ? 'Uses the Bajaj storytelling rules: story rewrite for general talk, story play for valuable information, Unfolding Insights under questions, Coin Chime (the only sound effect) after low interest rates and money benefits, the intro music under every CTA, the outro, then the product disclaimer and the AI disclaimer. One background music at a time.'
+          : `${eff === 'team' ? aiLabel : 'Claude'} reads the timed script, the library and the guideline above and writes the cue sheet; the storytelling rules (Coin Chime only, CTA music, one music at a time, disclaimers) still apply on top.`}
         {' '}Your own clips stay.
       </p>
       {report && (

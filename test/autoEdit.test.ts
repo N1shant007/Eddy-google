@@ -191,6 +191,50 @@ describe('auto-edit (Bajaj storytelling rules)', () => {
     expect(go('Personal Loan').rep.notes.join(' ')).toMatch(/pl dis/);
   });
 
+  it('plays the intro music under every call to action, not only the last one', () => {
+    const doc = makeDoc();
+    doc.scriptText = [
+      'SHWETA: Welcome to the show. Today we talk about your first home.',
+      'KARAN: It is a big step for every family.',
+      'SHWETA: Let us start with eligibility.',
+      'KARAN: You can check your eligibility on the Bajaj Finserv app. Download the app today.', // mid-episode CTA (line 3)
+      'SHWETA: It shows your loan amount instantly.',
+      'KARAN: The documents are simple: ID, address and income proof.',
+      'SHWETA: Keep them ready before you apply.',
+      'KARAN: That makes approval faster.',
+      'SHWETA: So, visit the Bajaj Finserv website or apply now on the app.',               // final CTA (line 8)
+      'KARAN: Thanks for listening!',
+    ].join('\n');
+    doc.lines = parseScript(doc.scriptText).lines;
+    applyTimings(doc.lines, parseSubs(doc.lines.map((l, i) => `${i + 1}\n00:00:${String(i * 5).padStart(2, '0')},000 --> 00:00:${String(i * 5 + 4).padStart(2, '0')},500\n${l.text}\n`).join('\n')));
+    autoEdit(doc, lib);
+    const off = doc.clips.find((x) => x.assetHash === 'dlg')!.start;
+    const kind = (id: string) => doc.tracks.find((t) => t.id === id)?.kind;
+    const ctaIntro = doc.clips.filter((c) => c.assetHash === 'intro' && kind(c.trackId) === 'intro' && c.start - off > 5);
+    const covers = (t: number) => ctaIntro.some((c) => c.start <= off + t && c.start + c.dur >= off + t);
+    expect(covers(17), 'mid-episode CTA').toBe(true);   // line 3: 15–19.5 s
+    expect(covers(42), 'final CTA').toBe(true);         // line 8: 40–44.5 s
+    expect(covers(27), 'not between CTAs').toBe(false); // line 5: plain information
+  });
+
+  it('the outro follows the end of the speech and the product disclaimer starts right after it, even if the line timings stop early', () => {
+    const doc = makeDoc(); // episode audio 60 s, speech until 54.5 s
+    doc.product = 'Home Loan';
+    doc.lines = parseScript(SCRIPT).lines;
+    // timings that cover only the first 30 s (squeezed), as a transcript that stopped short would
+    applyTimings(doc.lines, parseSubs(doc.lines.map((l, i) => `${i + 1}\n00:00:${String(i * 2).padStart(2, '0')},000 --> 00:00:${String(i * 2 + 1).padStart(2, '0')},800\n${l.text}\n`).join('\n')));
+    doc.clips[0].dur = 90; // 35 s of silence after the speech
+    const rep = autoEdit(doc, { ...lib, dialogueDur: 90 });
+    const off = doc.clips.find((x) => x.assetHash === 'dlg')!.start;
+    const outro = doc.clips.find((c) => c.assetHash === 'outro')!, pd = doc.clips.find((c) => c.fixed === 'product')!;
+    const speechEnd = off + 54.5;
+    expect(outro.start).toBeGreaterThan(speechEnd - 3);
+    expect(outro.start).toBeLessThan(speechEnd);
+    expect(pd.start - (outro.start + outro.dur)).toBeLessThan(0.6); // right after the outro, no gap
+    expect(doc.clips.find((x) => x.assetHash === 'dlg')!.start + doc.clips.find((x) => x.assetHash === 'dlg')!.dur).toBeLessThanOrEqual(pd.start + 0.01); // silent tail trimmed
+    expect(rep.notes.join(' ')).toMatch(/lined up with the speech/);
+  });
+
   it('keeps manually placed clips through a re-run', () => {
     const { doc } = run();
     const sfx = trackFor(doc, 'sfx');
