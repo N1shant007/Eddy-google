@@ -165,6 +165,25 @@ describe('auto-edit (Bajaj storytelling rules)', () => {
     expect(e.start).toBeGreaterThan(p.start);
   });
 
+  it('plays "2new hl DIS" from the Ending Home Loan Disclaimer category just before the closing AI disclaimer', () => {
+    const endCat: Category = { id: 'k_end_hl', name: 'Ending Home Loan Disclaimer', role: 'pdisclaimer' };
+    const hl = A('hl2', '2new hl DIS', 'k_pdisc', 12, { product: 'Home Loan' });
+    hl.categoryId = 'k_end_hl';
+    const other = A('hlold', 'Old home loan disclaimer', 'k_pdisc', 15, { product: 'Home Loan' });
+    const lib2 = { ...lib, categories: [...cats, endCat], assets: [...lib.assets.filter((a) => a.hash !== 'pdisc'), hl, other] };
+    for (const product of ['Home Loan', '']) {
+      const doc = makeDoc();
+      doc.scriptText = 'SHWETA: Welcome to the show.\nKARAN: Let us talk about planning.\nSHWETA: Thanks for listening!';
+      doc.product = product;
+      autoEdit(doc, lib2);
+      if (!product) doc.product = '';
+      const p = doc.clips.find((c) => c.fixed === 'product'), e = doc.clips.find((c) => c.fixed === 'end')!;
+      expect(p?.assetHash, `product "${product}"`).toBe('hl2');
+      expect(e.start).toBeGreaterThan(p!.start + p!.dur - 0.01);
+      expect(p!.gain).toBe(0);
+    }
+  });
+
   it('keeps manually placed clips through a re-run', () => {
     const { doc } = run();
     const sfx = trackFor(doc, 'sfx');

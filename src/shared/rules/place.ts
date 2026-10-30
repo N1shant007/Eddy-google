@@ -253,7 +253,7 @@ export function placeCues(doc: ProjectDoc, cues: Cue[], ctx: PlaceContext): Plac
   noOverlapMusic();
   fillMusicGaps();
   noOverlapMusic();
-  placeDisclaimers(doc, ctx.assets);
+  placeDisclaimers(doc, ctx.assets, ctx.categories);
   pruneTracks(doc);
   if (missingStory) notes.push('Storytelling music is missing: add “story rewrite” and “story play” to the Storytelling category in the Audio library.');
   if (!disc) notes.push('Add your AI disclaimer audio (a category set to “AI disclaimer”) so it opens and closes every episode.');
@@ -261,12 +261,19 @@ export function placeCues(doc: ProjectDoc, cues: Cue[], ctx: PlaceContext): Plac
 }
 
 /** fixed rule: AI disclaimer at the start; at the end the product disclaimer (if any) then the AI disclaimer */
-export function placeDisclaimers(doc: ProjectDoc, assets: Asset[]) {
+export function placeDisclaimers(doc: ProjectDoc, assets: Asset[], categories?: Category[]) {
   doc.clips = doc.clips.filter((c) => !c.fixed);
   if (!doc.clips.length) return;
   const disc = assets.find((a) => a.role === 'disclaimer');
   const norm = (s?: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  const pd = doc.product ? assets.filter((a) => a.role === 'pdisclaimer' && norm(a.product) === norm(doc.product)).pop() : undefined;
+  // the closing product disclaimer: one from an "Ending … Disclaimer" category first (e.g. Ending Home Loan Disclaimer → “2new hl DIS”),
+  // for the episode's product; with no product set, the ending Home Loan disclaimer
+  const ending = new Set((categories || []).filter((c) => /ending/i.test(c.name) && /disclaimer/i.test(c.name)).map((c) => c.id));
+  const pds = assets.filter((a) => a.role === 'pdisclaimer');
+  const rank = (a: Asset) => (ending.has(a.categoryId) ? 2 : 0) + (/^2new hl dis/i.test(a.name.trim()) ? 1 : 0);
+  const best = (list: Asset[]) => list.slice().sort((a, b) => rank(b) - rank(a))[0];
+  const product = norm(doc.product) || 'home loan';
+  const pd = best(pds.filter((a) => norm(a.product) === product)) || (doc.product ? undefined : best(pds.filter((a) => ending.has(a.categoryId))));
   if (!disc && !pd) return;
   const tr = trackFor(doc, 'disclaimer');
   tr.duck = 0;
