@@ -9,7 +9,7 @@ export const SFX_RULE =
   "SFX: Coin Chime is the only sound effect allowed. Don't use Marimba Pop, Takeaway Bell, Character Intros, Drumrolls, Reactions or any other SFX.";
 
 export const PRODUCT_DISCLAIMERS_RULE =
-  'PRODUCT DISCLAIMERS (MANDATORY): Eddy asks for the episode\'s product before the auto-edit. Just before the closing AI disclaimer, play that product\'s disclaimer from the Product Disclaimer category in the Audio library, at full volume, with nothing playing over it. The closing AI disclaimer follows straight after it. Home Loan: "2new hl DIS".';
+  'PRODUCT DISCLAIMERS (MANDATORY): Eddy asks once for the episode\'s product, when the episode audio is imported. Just before the closing AI disclaimer, play that product\'s disclaimer from the Product Disclaimer category in the Audio library, at full volume, with nothing playing over it. The closing AI disclaimer follows straight after it. Home Loan: "2new hl DIS".';
 
 /** the product-disclaimer rule (replaces the earlier ENDING DISCLAIMER line): after FIXED, else first */
 function withProductDisclaimers(t: string): string {
