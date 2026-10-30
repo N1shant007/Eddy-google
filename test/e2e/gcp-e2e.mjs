@@ -121,7 +121,12 @@ try {
 
   /* 4. upload a 26 MB episode (4 parts) */
   const buf = readFileSync(AUDIO), hash = createHash('sha256').update(buf).digest('hex');
-  await page.locator('input[type=file][accept^="audio"]').setInputFiles(AUDIO);
+  // Import episode audio asks for the product once, then opens the file picker
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: /Import episode audio/ }).click();
+  await page.locator('#ae-product').selectOption({ label: 'Home Loan' });
+  await page.locator('.modal button[type=submit]', { hasText: 'Continue' }).click();
+  await (await chooser).setFiles(AUDIO);
   let head = 404;
   for (let i = 0; i < 90 && head !== 200; i++) { head = (await page.evaluate((h) => fetch('/api/audio/' + h, { method: 'HEAD' }).then((r) => r.status), hash)); if (head !== 200) await page.waitForTimeout(1000); }
   if (head !== 200) fail('episode audio did not reach Cloud Storage');
@@ -136,7 +141,8 @@ try {
   await page.locator('textarea').first().fill(SCRIPT);
   await page.getByRole('radio', { name: /Rules/ }).click();
   await page.locator('button.btn.primary', { hasText: /^\s*Auto-edit( again)?\s*$/ }).click();
-  await page.getByText(/sounds placed/).waitFor({ timeout: 60000 });
+  if (await page.locator('#ae-product').count()) fail('Auto-edit asked for the product again (it is asked once, on import)');
+  await page.getByText(/sounds placed/).waitFor({ timeout: 300000 });
   const report = await page.getByText(/sounds placed/).first().innerText();
   log('auto-edit:', report.replace(/\s+/g, ' '));
   await page.waitForTimeout(2500); // autosave
@@ -152,6 +158,11 @@ try {
   const saved = (await api(`/api/projects/${projectId}`)).body.draft;
   if (!saved.clips.length || !saved.cues.length || saved.dialogueHash !== hash) fail('draft in Firestore is missing the edit');
   log(`version 1 saved; Firestore draft has ${saved.clips.length} clips and ${saved.cues.length} cues`);
+  const assetsNow = (await api('/api/assets')).body || [];
+  const pdClip = saved.clips.find((c) => c.fixed === 'product'), endClip = saved.clips.find((c) => c.fixed === 'end');
+  const pdName = assetsNow.find((a) => a.hash === pdClip?.assetHash)?.name;
+  if (saved.product !== 'Home Loan' || pdName !== '2new hl DIS' || !(endClip?.start > pdClip?.start)) fail(`product disclaimer: product ${saved.product}, got ${pdName}`);
+  log(`product Home Loan chosen; "${pdName}" plays just before the closing AI disclaimer`);
 
   /* 7. save final mix (renders MP3 in the browser, uploads, stores under exports/) */
   await page.getByRole('button', { name: /Save final mix/ }).click();

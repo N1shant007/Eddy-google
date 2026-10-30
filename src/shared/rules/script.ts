@@ -228,3 +228,15 @@ export function guessProduct(txt: string, products: string[]): string {
   for (const p of products) { const k = norm(p); if (!k) continue; const c = t.split(k).length - 1; if (c > n) { n = c; best = p; } }
   return best;
 }
+
+/** Product → disclaimer file name, from the guideline line
+    PRODUCT DISCLAIMERS (MANDATORY): … Home Loan: "2new hl DIS"; Personal Loan: "pl dis" */
+export function parseProductDisclaimers(guideline: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  for (const line of String(guideline || '').split('\n')) {
+    if (!/^\s*PRODUCT DISCLAIMERS?\b/i.test(line)) continue;
+    for (const m of line.matchAll(/([A-Za-z][A-Za-z0-9 &'-]{1,40}?)\s*(?::|→|->|=)\s*["“]([^"”]+)["”]/g)) out[norm(m[1].replace(/^(and|or|for)\s+/i, ''))] = m[2].trim();
+  }
+  return out;
+}

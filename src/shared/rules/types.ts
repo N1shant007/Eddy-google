@@ -119,6 +119,8 @@ export const DEFAULT_SETTINGS: Settings = {
 export interface ProjectDoc {
   schema: 2;
   product: string;
+  /** "No product" was chosen on import: no product disclaimer, and no guessing the product from the script */
+  noProduct?: boolean;
   scriptText: string;
   lines: ScriptLine[];
   dialogueHash: string | null;

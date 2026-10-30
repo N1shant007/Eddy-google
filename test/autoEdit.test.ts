@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyTimings, autoEdit, emptyDoc, INTRO_FULL, parseScript, parseSubs, trackFor,
+  applyTimings, autoEdit, emptyDoc, INTRO_FULL, parseProductDisclaimers, parseScript, parseSubs, trackFor,
   type Asset, type Category, type ProjectDoc,
 } from '../src/shared/rules/index';
 
@@ -90,18 +90,43 @@ describe('auto-edit (Bajaj storytelling rules)', () => {
     expect(dlg.start).toBeCloseTo(8.2 + INTRO_FULL, 2);
   });
 
-  it('puts a coin chime on the competitive interest rate line, right after the phrase', () => {
+  it('plays a coin chime in the gap after the competitive interest rate line, at -6 dB', () => {
     const { doc } = run();
     const coin = doc.clips.filter((c) => c.assetHash === 'coin');
-    expect(coin.length).toBeGreaterThanOrEqual(1);
-    const lineStart = 10.7 + 5 * 5; // dialogue offset + line 5
-    expect(coin[0].start).toBeGreaterThan(lineStart);
-    expect(coin[0].start).toBeLessThan(lineStart + 4.5);
+    const lineEnd = 5 * 5 + 4.5; // line 6 (index 5): 25.0–29.5 s
+    const off = doc.clips.find((x) => x.assetHash === 'dlg')!.start; // the dialogue starts after the disclaimer and intro
+    const c = coin.find((x) => x.start >= off + lineEnd && x.start < off + lineEnd + 0.5);
+    expect(c, JSON.stringify(coin.map((x) => [x.start - off, x.gain]))).toBeTruthy();
+    expect(c!.gain).toBe(-6);
   });
 
-  it('plays Character Intro – Warm Keys when the guest is welcomed', () => {
-    const { doc } = run();
-    expect(doc.clips.some((c) => c.assetHash === 'keys')).toBe(true);
+  it('Coin Chime is the only sound effect (no Marimba Pop, Takeaway Bell, Character Intro or Harp Glide)', () => {
+    const { doc, kind } = run();
+    const fx = doc.clips.filter((c) => ['sfx', 'emotion', 'transition'].includes(kind(c.trackId)!));
+    expect(fx.length).toBeGreaterThan(0);
+    expect([...new Set(fx.map((c) => c.assetHash))]).toEqual(['coin']);
+  });
+
+  it('chimes after money benefits too, at least 12 s from any other Coin Chime; low-rate chimes always play', () => {
+    const doc = makeDoc();
+    doc.scriptText = [
+      'SHWETA: Welcome to the show.',
+      'KARAN: Interest rates are low right now.',            // 5 s: low rate (always)
+      'SHWETA: And there are no hidden charges at all.',      // 10 s: benefit, too close to 5 s → skipped
+      'KARAN: Bajaj offers very good rates for families.',   // 15 s: low rate (always)
+      'SHWETA: So there is no pressure on the budget.',       // 20 s: benefit, too close → skipped
+      'KARAN: Let us talk about documents.',
+      'SHWETA: What do I need?',
+      'KARAN: Your ID and income proof.',
+      'SHWETA: And no prepayment charges if I pay early?',    // 40 s: benefit, 25 s after the last → chimes
+      'KARAN: Thanks for listening!',
+    ].join('\n');
+    doc.lines = parseScript(doc.scriptText).lines;
+    applyTimings(doc.lines, parseSubs(parseScript(doc.scriptText).lines.map((l, i) => `${i + 1}\n00:00:${String(i * 5).padStart(2, '0')},000 --> 00:00:${String(i * 5 + 4).padStart(2, '0')},500\n${l.text}\n`).join('\n')));
+    autoEdit(doc, lib);
+    const off = doc.clips.find((x) => x.assetHash === 'dlg')!.start;
+    const starts = doc.clips.filter((c) => c.assetHash === 'coin').map((c) => Math.floor((c.start - off) / 5));
+    expect(starts, JSON.stringify(doc.cues.filter((c) => /coin/.test(c.sound)).map((c) => [c.line, c.note, c.reason]))).toEqual([1, 3, 8]);
   });
 
   it('uses story play when the Bajaj home loan is introduced and Unfolding Insights under questions', () => {
@@ -131,11 +156,6 @@ describe('auto-edit (Bajaj storytelling rules)', () => {
     for (const c of doc.clips.filter((c) => kind(c.trackId) === 'bed')) expect(c.gain).toBe(-10);
   });
 
-  it('a harp glide plays when the guest acknowledges', () => {
-    const { doc } = run();
-    expect(doc.clips.some((c) => c.assetHash === 'harp')).toBe(true);
-  });
-
   it('closes with the product disclaimer and then the AI disclaimer', () => {
     const { doc, rep } = run();
     expect(rep.product).toBe('Home Loan');
@@ -143,6 +163,32 @@ describe('auto-edit (Bajaj storytelling rules)', () => {
     const last = Math.max(...doc.clips.filter((c) => !c.fixed).map((c) => c.start + c.dur));
     expect(p.start).toBeGreaterThanOrEqual(last);
     expect(e.start).toBeGreaterThan(p.start);
+  });
+
+  it('plays the disclaimer the guideline names for the chosen product ("2new hl DIS" for Home Loan) before the closing AI disclaimer', () => {
+    const pdCat: Category = { id: 'k_pd', name: 'Product Disclaimer', role: 'sfx' }; // even with another role
+    const hl = A('hl2', '2new hl DIS', 'k_engage', 12);
+    hl.categoryId = 'k_pd'; hl.role = 'sfx'; hl.product = undefined;
+    const other = A('hlold', 'Old home loan disclaimer', 'k_pdisc', 15, { product: 'Home Loan' });
+    const named = parseProductDisclaimers('FIXED: x\nPRODUCT DISCLAIMERS (MANDATORY): play it before the closing AI disclaimer. Home Loan: "2new hl DIS"; Personal Loan: "pl dis".');
+    expect(named).toEqual({ 'home loan': '2new hl DIS', 'personal loan': 'pl dis' });
+    const lib2 = { ...lib, products: [], productDisclaimers: named, categories: [...cats, pdCat], assets: [...lib.assets.filter((a) => a.hash !== 'pdisc'), hl, other] };
+    const go = (product: string) => {
+      const doc = makeDoc();
+      doc.scriptText = 'SHWETA: Welcome to the show about home loans.\nKARAN: Interest rates are low.\nSHWETA: Thanks for listening!';
+      doc.product = product;
+      const rep = autoEdit(doc, lib2);
+      return { doc, rep, p: doc.clips.find((c) => c.fixed === 'product'), e: doc.clips.find((c) => c.fixed === 'end')! };
+    };
+    const h = go('Home Loan');
+    expect(h.p?.assetHash).toBe('hl2');
+    expect(h.e.start).toBeGreaterThan(h.p!.start + h.p!.dur - 0.01);
+    expect(h.p!.gain).toBe(0);
+    expect(h.doc.clips.filter((c) => c.assetHash === 'hl2').length).toBe(1); // never used as a sound effect too
+    // no product chosen: no product disclaimer, even though the script says "home loans"
+    expect(go('').p).toBeUndefined();
+    // named file missing from the library: a clear note
+    expect(go('Personal Loan').rep.notes.join(' ')).toMatch(/pl dis/);
   });
 
   it('keeps manually placed clips through a re-run', () => {

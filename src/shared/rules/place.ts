@@ -56,6 +56,7 @@ export function lineTimes(doc: ProjectDoc): ({ s: number; e: number } | null)[] 
 export interface PlaceContext {
   assets: Asset[];
   categories: Category[];
+  productDisclaimers?: Record<string, string>;
 }
 export interface PlaceResult { placed: number; notes: string[]; missingStory: boolean }
 
@@ -63,7 +64,8 @@ const MUSIC_ROLES = new Set(['intro', 'outro', 'bed', 'positioning']);
 
 export function placeCues(doc: ProjectDoc, cues: Cue[], ctx: PlaceContext): PlaceResult {
   const st = doc.settings, N = doc.lines.length;
-  const lib = ctx.assets.filter((a) => a.role !== 'dialogue' && a.role !== 'disclaimer' && a.role !== 'pdisclaimer');
+  const pdCats = productDisclaimerCats(ctx.categories);
+  const lib = ctx.assets.filter((a) => a.role !== 'dialogue' && a.role !== 'disclaimer' && a.role !== 'pdisclaimer' && !pdCats.has(a.categoryId));
   const byHash = new Map(ctx.assets.map((a) => [a.hash, a]));
   const catName = (a: Asset) => (ctx.categories.find((c) => c.id === a.categoryId)?.name || '').toLowerCase();
   const useCount: Record<string, number> = {};
@@ -253,21 +255,42 @@ export function placeCues(doc: ProjectDoc, cues: Cue[], ctx: PlaceContext): Plac
   noOverlapMusic();
   fillMusicGaps();
   noOverlapMusic();
-  placeDisclaimers(doc, ctx.assets);
+  const pdNote = placeDisclaimers(doc, ctx.assets, ctx.categories, ctx.productDisclaimers);
+  if (pdNote) notes.push(pdNote);
   pruneTracks(doc);
   if (missingStory) notes.push('Storytelling music is missing: add “story rewrite” and “story play” to the Storytelling category in the Audio library.');
   if (!disc) notes.push('Add your AI disclaimer audio (a category set to “AI disclaimer”) so it opens and closes every episode.');
   return { placed, notes, missingStory };
 }
 
-/** fixed rule: AI disclaimer at the start; at the end the product disclaimer (if any) then the AI disclaimer */
-export function placeDisclaimers(doc: ProjectDoc, assets: Asset[]) {
+const PD_CAT = /product\s+disclaimer|ending.*disclaimer/i;
+const productDisclaimerCats = (categories?: Category[]) => new Set((categories || []).filter((c) => PD_CAT.test(c.name)).map((c) => c.id));
+
+/** fixed rule: AI disclaimer at the start; at the end the product's disclaimer, then the AI disclaimer.
+    The product's disclaimer is the file the guideline names for it (PRODUCT DISCLAIMERS line, e.g. Home Loan: "2new hl DIS"),
+    looked up in the Product Disclaimer category; otherwise a product disclaimer sound tagged with that product.
+    Returns a note when the episode's product has no disclaimer. */
+export function placeDisclaimers(doc: ProjectDoc, assets: Asset[], categories?: Category[], named?: Record<string, string>): string | null {
   doc.clips = doc.clips.filter((c) => !c.fixed);
-  if (!doc.clips.length) return;
+  if (!doc.clips.length) return null;
   const disc = assets.find((a) => a.role === 'disclaimer');
   const norm = (s?: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  const pd = doc.product ? assets.filter((a) => a.role === 'pdisclaimer' && norm(a.product) === norm(doc.product)).pop() : undefined;
-  if (!disc && !pd) return;
+  const pdCats = productDisclaimerCats(categories);
+  const pool = assets.filter((a) => a.role === 'pdisclaimer' || pdCats.has(a.categoryId));
+  const product = norm(doc.product);
+  let pd: Asset | undefined;
+  let note: string | null = null;
+  if (product) {
+    const file = named?.[product];
+    if (file) {
+      const f = norm(file.replace(/\.(mp3|wav|m4a)$/i, ''));
+      pd = pool.find((a) => norm(a.name) === f) || assets.find((a) => norm(a.name) === f) || pool.find((a) => norm(a.name).startsWith(f));
+      if (!pd) note = `The guideline names “${file}” as the ${doc.product} disclaimer, but there is no sound with that name in the Audio library (Product Disclaimer category).`;
+    }
+    pd ??= pool.filter((a) => norm(a.product) === product).pop();
+    if (!pd && !note) note = `No product disclaimer for ${doc.product}: add it to the Product Disclaimer category and name it in the guideline (PRODUCT DISCLAIMERS line).`;
+  }
+  if (!disc && !pd) return note;
   const tr = trackFor(doc, 'disclaimer');
   tr.duck = 0;
   const end = r2(doc.clips.reduce((m, c) => Math.max(m, c.start + c.dur), 0) + 0.4);
@@ -276,4 +299,5 @@ export function placeDisclaimers(doc: ProjectDoc, assets: Asset[]) {
   let t = end;
   if (pd) { add(pd, t, 'product'); t = r2(t + pd.dur + 0.3); }
   if (disc) add(disc, t, 'end');
+  return note;
 }

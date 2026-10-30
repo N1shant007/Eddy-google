@@ -9,7 +9,7 @@ import { HistoryDrawer } from '../projects/HistoryDrawer';
 import { Timeline } from './Timeline';
 import { ClipInspector } from './ClipInspector';
 import { LibraryPanel } from './LibraryPanel';
-import { AutoEditPanel, autoEditFromPipeline, geminiModel, transcribeEpisode } from './AutoEditPanel';
+import { AutoEditPanel, askProduct, autoEditFromPipeline, geminiModel, transcribeEpisode } from './AutoEditPanel';
 import { AskPanel } from './AskPanel';
 import { fmtTime } from './layout';
 import type { Project, ProjectMeta } from '../data/types';
@@ -221,6 +221,14 @@ export function EditorView({ projectId }: { projectId: string }) {
   };
 
   /* ---------- import main dialogue ---------- */
+  /** the one product question: asked when importing the episode audio, before the file is picked */
+  const chooseProductThenImport = async () => {
+    const product = await askProduct();
+    if (product == null) return;
+    useEditor.getState().edit((d) => { d.product = product; d.noProduct = !product; });
+    fileRef.current?.click();
+  };
+
   const importMain = async (f: File | undefined) => {
     if (!f) return;
     const ctl = { set: (_p: number, _l: string) => {}, close: () => {} };
@@ -354,7 +362,7 @@ export function EditorView({ projectId }: { projectId: string }) {
         {audioProg && <span className="tag" title="The sounds download once; next time they open from this computer">Loading audio {audioProg.done}/{audioProg.total}…</span>}
         <div className="grow" />
         <input ref={fileRef} type="file" accept="audio/*,.mp3,.wav,.m4a" hidden onChange={(e) => { importMain(e.target.files?.[0]); e.target.value = ''; }} />
-        <button className="btn" onClick={() => fileRef.current?.click()}><IUpload /> {hasDialogue ? 'Replace audio' : 'Import episode audio'}</button>
+        <button className="btn" onClick={chooseProductThenImport}><IUpload /> {hasDialogue ? 'Replace audio' : 'Import episode audio'}</button>
         <button className="btn" onClick={() => setHistory((h) => !h)}><IHistory /> History</button>
         <button className="btn" onClick={saveVersion} title="Ctrl+S"><ISave /> Save version</button>
         <button className="btn" onClick={exportMp3} disabled={!ed.doc.clips.length} title="Download the mix to this computer"><IDownload /> Export MP3</button>

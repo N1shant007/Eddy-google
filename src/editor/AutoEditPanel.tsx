@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  alignLines, applyTimings, autoEdit, autoEditPrompt, finishEdit, linesFromBlocks, normCues, parseAlignJson, parseJsonLoose,
+  alignLines, applyTimings, autoEdit, autoEditPrompt, finishEdit, guessProduct, linesFromBlocks, normCues, parseAlignJson, parseJsonLoose, parseProductDisclaimers,
   parseScript, parseSubs, placeCues, prepareLines, type AutoEditReport, type Cue,
 } from '@eddy/rules';
 import { aiProviders, askAI, useAi } from '../data/ai';
@@ -10,6 +10,7 @@ import { useApp } from '../state/app';
 import { useEditor } from '../state/editor';
 import { getBuffer, loadAll, loadBuffer, speechSegments } from '../audio/engine';
 import { IMagic, IUpload } from '../ui/icons';
+import { openDialog } from '../ui/dialogs';
 import { fmtTime } from './layout';
 
 type Engine = 'rules' | 'team' | 'paste';
@@ -27,7 +28,7 @@ export async function autoEditFromPipeline(subtitles: string | null): Promise<Au
   const s = useEditor.getState();
   const h = s.doc.dialogueHash;
   const buf = h ? getBuffer(h) || (await loadBuffer(h)) : null;
-  const c = { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products };
+  const c = { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products: useEditor.getState().doc.noProduct ? [] : products, productDisclaimers: parseProductDisclaimers(activeGuidelineText()) };
   let rep!: AutoEditReport;
   s.edit((d) => {
     if (subtitles) {
@@ -89,6 +90,48 @@ export async function transcribeEpisode(model: string): Promise<string> {
   return msg;
 }
 
+/** products to choose from: the usual ones, those with a disclaimer sound, and those the guideline names a disclaimer for */
+export function productChoices(): string[] {
+  const { assets } = useApp.getState();
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const title = (x: string) => x.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  const named = Object.keys(parseProductDisclaimers(activeGuidelineText())).map(title);
+  const all = [...DEFAULT_PRODUCTS, ...assets.filter((a) => a.role === 'pdisclaimer' && a.product).map((a) => a.product!), ...named];
+  const seen = new Set<string>();
+  return all.filter((p) => { const k = norm(p); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+}
+
+/** asks which product the episode is about, once, when the episode audio is imported (its disclaimer plays before the closing AI disclaimer). null = cancelled, '' = no product */
+export function askProduct(): Promise<string | null> {
+  const d = useEditor.getState().doc;
+  const options = productChoices();
+  const guess = d.product || guessProduct(d.scriptText || '', options) || '';
+  const named = parseProductDisclaimers(activeGuidelineText());
+  return openDialog<string>((close) => <ProductDialog options={options} initial={guess} named={named} close={close} />);
+}
+
+function ProductDialog({ options, initial, named, close }: { options: string[]; initial: string; named: Record<string, string>; close: (v: string | null) => void }) {
+  const [v, setV] = useState(options.find((o) => o.toLowerCase() === initial.toLowerCase()) || initial);
+  const file = named[v.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()];
+  return (
+    <form className="modal" onSubmit={(e) => { e.preventDefault(); close(v); }}>
+      <h3>Which product is this episode about?</h3>
+      <div className="field">
+        <label htmlFor="ae-product">Product</label>
+        <select id="ae-product" value={v} onChange={(e) => setV(e.target.value)} autoFocus>
+          <option value="">No product (no product disclaimer)</option>
+          {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+      <p className="hint">{v ? (file ? `Its disclaimer, “${file}”, plays just before the closing AI disclaimer.` : `The ${v} disclaimer from the Product Disclaimer category plays just before the closing AI disclaimer. Name the file in the guideline (PRODUCT DISCLAIMERS line) to pick a specific one.`) : 'Only the AI disclaimer will open and close the episode.'}</p>
+      <div className="row">
+        <button type="button" className="btn" onClick={() => close(null)}>Cancel</button>
+        <button type="submit" className="btn primary">Continue</button>
+      </div>
+    </form>
+  );
+}
+
 const DEFAULT_PRODUCTS = ['Home Loan', 'Personal Loan', 'Gold Loan', 'Business Loan', 'Loan Against Property', 'Insurance', 'Fixed Deposit', 'Credit Card'];
 
 export function AutoEditPanel() {
@@ -113,7 +156,9 @@ export function AutoEditPanel() {
   const ctx = async () => {
     const h = useEditor.getState().doc.dialogueHash;
     const buf = h ? getBuffer(h) || (await loadBuffer(h)) : null;
-    return { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products };
+    // the product chosen on import; with none chosen yet (older projects) it is picked from the script, unless "No product" was chosen
+    const noGuess = !!useEditor.getState().doc.noProduct;
+    return { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products: noGuess ? [] : products, productDisclaimers: parseProductDisclaimers(activeGuidelineText()) };
   };
 
   const run = async () => {
@@ -216,8 +261,8 @@ export function AutoEditPanel() {
       )}
       <div className="field">
         <label>Product</label>
-        <input list="eddy-products" value={doc.product} placeholder="Picked from the script if empty"
-          onFocus={() => useEditor.getState().checkpoint()} onChange={(e) => edit((d) => { d.product = e.target.value; }, false)} />
+        <input list="eddy-products" value={doc.product} placeholder="Chosen when you import the episode audio"
+          onFocus={() => useEditor.getState().checkpoint()} onChange={(e) => edit((d) => { d.product = e.target.value; if (e.target.value.trim()) d.noProduct = false; }, false)} />
         <datalist id="eddy-products">{products.map((p) => <option key={p} value={p} />)}</datalist>
       </div>
       <div className="field">
