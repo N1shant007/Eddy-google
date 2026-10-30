@@ -17,6 +17,8 @@ export interface AutoEditInput {
   speech: [number, number][];
   dialogueDur: number;
   products?: string[];
+  /** product → disclaimer file name (from the guideline's PRODUCT DISCLAIMERS line) */
+  productDisclaimers?: Record<string, string>;
 }
 export interface AutoEditReport {
   lines: number;
@@ -66,7 +68,7 @@ export function finishEdit(doc: ProjectDoc, inp: AutoEditInput, cues: Cue[], not
   // cues the user switched off stay off
   const off = new Set(doc.cues.filter((c) => !c.on).map((c) => `${c.type}|${c.sound}|${c.line}`));
   for (const c of cues) if (off.has(`${c.type}|${c.sound}|${c.line}`)) c.on = false;
-  const r = placeCues(doc, cues, { assets: inp.assets, categories: inp.categories });
+  const r = placeCues(doc, cues, { assets: inp.assets, categories: inp.categories, productDisclaimers: inp.productDisclaimers });
   doc.cues = cues;
   return {
     lines: doc.lines.length,

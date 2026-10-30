@@ -131,12 +131,21 @@ try {
   log(`episode uploaded in ${Math.ceil(buf.length / 8388608)} parts, verified by SHA-256, streams with ranges`);
 
   /* 5. rules auto-edit */
-  // with Gemini on the server, the import dialog transcribes and auto-edits first: wait until it closes
+  // with Gemini on the server, the import asks for the product, then transcribes and auto-edits: answer and wait until it closes
+  const answerProduct = async (timeout) => {
+    const sel = page.locator('#ae-product');
+    if (await sel.waitFor({ timeout }).then(() => true, () => false)) {
+      await sel.selectOption({ label: 'Home Loan' });
+      await page.locator('.modal button[type=submit]', { hasText: 'Continue' }).click();
+    }
+  };
+  await answerProduct(8000);
   await page.locator('.overlay').waitFor({ state: 'detached', timeout: 300000 });
   await page.locator('textarea').first().fill(SCRIPT);
   await page.getByRole('radio', { name: /Rules/ }).click();
   await page.locator('button.btn.primary', { hasText: /^\s*Auto-edit( again)?\s*$/ }).click();
-  await page.getByText(/sounds placed/).waitFor({ timeout: 60000 });
+  await answerProduct(10000); // Eddy asks for the product before every auto-edit
+  await page.getByText(/sounds placed/).waitFor({ timeout: 300000 });
   const report = await page.getByText(/sounds placed/).first().innerText();
   log('auto-edit:', report.replace(/\s+/g, ' '));
   await page.waitForTimeout(2500); // autosave
@@ -152,6 +161,11 @@ try {
   const saved = (await api(`/api/projects/${projectId}`)).body.draft;
   if (!saved.clips.length || !saved.cues.length || saved.dialogueHash !== hash) fail('draft in Firestore is missing the edit');
   log(`version 1 saved; Firestore draft has ${saved.clips.length} clips and ${saved.cues.length} cues`);
+  const assetsNow = (await api('/api/assets')).body || [];
+  const pdClip = saved.clips.find((c) => c.fixed === 'product'), endClip = saved.clips.find((c) => c.fixed === 'end');
+  const pdName = assetsNow.find((a) => a.hash === pdClip?.assetHash)?.name;
+  if (saved.product !== 'Home Loan' || pdName !== '2new hl DIS' || !(endClip?.start > pdClip?.start)) fail(`product disclaimer: product ${saved.product}, got ${pdName}`);
+  log(`product Home Loan chosen; "${pdName}" plays just before the closing AI disclaimer`);
 
   /* 7. save final mix (renders MP3 in the browser, uploads, stores under exports/) */
   await page.getByRole('button', { name: /Save final mix/ }).click();

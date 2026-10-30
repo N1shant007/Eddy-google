@@ -9,7 +9,7 @@ import { HistoryDrawer } from '../projects/HistoryDrawer';
 import { Timeline } from './Timeline';
 import { ClipInspector } from './ClipInspector';
 import { LibraryPanel } from './LibraryPanel';
-import { AutoEditPanel, autoEditFromPipeline, geminiModel, transcribeEpisode } from './AutoEditPanel';
+import { AutoEditPanel, askProduct, autoEditFromPipeline, geminiModel, transcribeEpisode } from './AutoEditPanel';
 import { AskPanel } from './AskPanel';
 import { fmtTime } from './layout';
 import type { Project, ProjectMeta } from '../data/types';
@@ -56,6 +56,7 @@ export function EditorView({ projectId }: { projectId: string }) {
         }
         // first open of an episode from the pipeline: build the edit straight away
         if (alive && pipeline?.autoEditPending && draft.dialogueHash) {
+          if (!useEditor.getState().doc.product) { const pr = await askProduct(); if (pr) useEditor.getState().edit((d) => { d.product = pr; }, false); }
           const rep = await autoEditFromPipeline(pipeline.subtitles);
           // save the edit first, then mark it done: closing the tab right away must not lose it
           const st = useEditor.getState();
@@ -243,13 +244,15 @@ export function EditorView({ projectId }: { projectId: string }) {
       // with Gemini on the server: transcribe the episode and build the edit straight away
       const gm = await geminiModel();
       const placed = useEditor.getState().doc.clips.some((c) => c.assetHash !== hash);
-      if (gm && !placed) {
+      const product = gm && !placed ? await askProduct() : null;
+      if (gm && !placed && product != null) {
+        useEditor.getState().edit((d) => { d.product = product; });
         ctl.set(0.96, 'Gemini is listening to the episode and timing every line…');
         let note = '';
         try { note = await transcribeEpisode(gm); }
         catch (e: any) { toast(`${e?.message || e} The auto-edit will time the lines from the speech pauses.`, 'error', 8000); }
         ctl.set(0.99, 'Auto-editing…');
-        const rep = await autoEditFromPipeline(null);
+        const rep = await autoEditFromPipeline(null, false);
         ctl.set(1, 'Done');
         toast(`${note ? note + '. ' : ''}Auto-edit placed ${rep.placed} sounds. Review it, then Save version.`, 'ok', 8000);
       } else {

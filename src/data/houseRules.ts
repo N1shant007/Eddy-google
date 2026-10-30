@@ -8,15 +8,17 @@ export const BENEFITS_RULE =
 export const SFX_RULE =
   "SFX: Coin Chime is the only sound effect allowed. Don't use Marimba Pop, Takeaway Bell, Character Intros, Drumrolls, Reactions or any other SFX.";
 
-export const ENDING_DISCLAIMER_RULE =
-  'ENDING DISCLAIMER (MANDATORY): Just before the closing AI disclaimer, play "2new hl DIS" from the Ending Home Loan Disclaimer category in the Audio library, at full volume, with nothing playing over it. The closing AI disclaimer follows straight after it.';
+export const PRODUCT_DISCLAIMERS_RULE =
+  'PRODUCT DISCLAIMERS (MANDATORY): Eddy asks for the episode\'s product before the auto-edit. Just before the closing AI disclaimer, play that product\'s disclaimer from the Product Disclaimer category in the Audio library, at full volume, with nothing playing over it. The closing AI disclaimer follows straight after it. Home Loan: "2new hl DIS".';
 
-/** the ending-disclaimer rule: after FIXED, else first */
-function withEndingDisclaimer(t: string): string {
-  if (/^ENDING DISCLAIMER\b/m.test(t)) return t;
-  const lines = t.split('\n');
-  const f = lines.findIndex((l) => /^FIXED\b[^:]*:/.test(l.trim()));
-  lines.splice(f >= 0 ? f + 1 : 0, 0, ENDING_DISCLAIMER_RULE);
+/** the product-disclaimer rule (replaces the earlier ENDING DISCLAIMER line): after FIXED, else first */
+function withProductDisclaimers(t: string): string {
+  let lines = t.split('\n').filter((l) => !/^ENDING DISCLAIMER\b/.test(l.trim()));
+  if (!lines.some((l) => /^PRODUCT DISCLAIMERS?\b/.test(l.trim()))) {
+    const f = lines.findIndex((l) => /^FIXED\b[^:]*:/.test(l.trim()));
+    lines.splice(f >= 0 ? f + 1 : 0, 0, PRODUCT_DISCLAIMERS_RULE);
+  }
+  lines = lines.filter((l, i, arr) => l.trim() || (i > 0 && arr[i - 1].trim()));
   return lines.join('\n').replace(/\n+$/, '');
 }
 
@@ -40,9 +42,9 @@ function withSfxRules(t: string): string {
   return lines.join('\n').replace(/^\n+/, '');
 }
 
-/** the text with the house rules: the ending disclaimer, Coin Chime only (BENEFITS + SFX), and the CTA rule before OUTRO, else before MIX, else at the end */
+/** the text with the house rules: product disclaimers, Coin Chime only (BENEFITS + SFX), and the CTA rule before OUTRO, else before MIX, else at the end */
 export function withHouseRules(text: string): string {
-  const t = withEndingDisclaimer(withSfxRules(text || ''));
+  const t = withProductDisclaimers(withSfxRules(text || ''));
   if (/^CTA:/m.test(t)) return t;
   if (/^OUTRO:/m.test(t)) return t.replace(/^OUTRO:/m, `${CTA_RULE}\nOUTRO:`);
   if (/^MIX:/m.test(t)) return t.replace(/^MIX:/m, `${CTA_RULE}\nMIX:`);

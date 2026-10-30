@@ -178,8 +178,13 @@ FR-08  Script, subtitles and transcription
 FR-09  Rules auto-edit
   Criteria: One click places intro, outro, disclaimers, background music and sound
             effects by the Bajaj storytelling rules (section 4), keeps clips placed by
-            hand, and shows a report of what it placed and why.
-  Verified by: A: autoEdit.test.ts (12 tests). E2E step 6.
+            hand, and shows a report of what it placed and why. Before every auto-edit
+            Eddy asks for the episode's product; its disclaimer (named in the
+            guideline's PRODUCT DISCLAIMERS line, e.g. Home Loan: "2new hl DIS", from
+            the Product Disclaimer category) plays just before the closing AI
+            disclaimer. Coin Chime is the only sound effect.
+  Verified by: A: autoEdit.test.ts, houseRules.test.ts. E2E step 6 (Home Loan, 2new hl
+               DIS)
   Sign-off: ____
 
 FR-10  AI auto-edit

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  alignLines, applyTimings, autoEdit, autoEditPrompt, finishEdit, linesFromBlocks, normCues, parseAlignJson, parseJsonLoose,
+  alignLines, applyTimings, autoEdit, autoEditPrompt, finishEdit, guessProduct, linesFromBlocks, normCues, parseAlignJson, parseJsonLoose, parseProductDisclaimers,
   parseScript, parseSubs, placeCues, prepareLines, type AutoEditReport, type Cue,
 } from '@eddy/rules';
 import { aiProviders, askAI, useAi } from '../data/ai';
@@ -10,6 +10,7 @@ import { useApp } from '../state/app';
 import { useEditor } from '../state/editor';
 import { getBuffer, loadAll, loadBuffer, speechSegments } from '../audio/engine';
 import { IMagic, IUpload } from '../ui/icons';
+import { openDialog } from '../ui/dialogs';
 import { fmtTime } from './layout';
 
 type Engine = 'rules' | 'team' | 'paste';
@@ -21,13 +22,13 @@ export const activeGuideline = (guidelineId?: string | null) => {
 export const activeGuidelineText = () => activeGuideline(useEditor.getState().doc.guidelineId)?.text || '';
 
 /** Pipeline hand-off: apply the pipeline's subtitles (if any) and run the rules auto-edit, without the panel open. */
-export async function autoEditFromPipeline(subtitles: string | null): Promise<AutoEditReport> {
+export async function autoEditFromPipeline(subtitles: string | null, guessProductFromScript = true): Promise<AutoEditReport> {
   const { assets, categories } = useApp.getState();
   const products = [...new Set([...DEFAULT_PRODUCTS, ...assets.filter((a) => a.role === 'pdisclaimer' && a.product).map((a) => a.product!)])];
   const s = useEditor.getState();
   const h = s.doc.dialogueHash;
   const buf = h ? getBuffer(h) || (await loadBuffer(h)) : null;
-  const c = { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products };
+  const c = { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products: guessProductFromScript ? products : [], productDisclaimers: parseProductDisclaimers(activeGuidelineText()) };
   let rep!: AutoEditReport;
   s.edit((d) => {
     if (subtitles) {
@@ -89,6 +90,48 @@ export async function transcribeEpisode(model: string): Promise<string> {
   return msg;
 }
 
+/** products to choose from: the usual ones, those with a disclaimer sound, and those the guideline names a disclaimer for */
+export function productChoices(): string[] {
+  const { assets } = useApp.getState();
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const title = (x: string) => x.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  const named = Object.keys(parseProductDisclaimers(activeGuidelineText())).map(title);
+  const all = [...DEFAULT_PRODUCTS, ...assets.filter((a) => a.role === 'pdisclaimer' && a.product).map((a) => a.product!), ...named];
+  const seen = new Set<string>();
+  return all.filter((p) => { const k = norm(p); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+}
+
+/** asks which product the episode is about (its disclaimer plays before the closing AI disclaimer). null = cancelled, '' = no product */
+export function askProduct(): Promise<string | null> {
+  const d = useEditor.getState().doc;
+  const options = productChoices();
+  const guess = d.product || guessProduct(d.scriptText || '', options) || '';
+  const named = parseProductDisclaimers(activeGuidelineText());
+  return openDialog<string>((close) => <ProductDialog options={options} initial={guess} named={named} close={close} />);
+}
+
+function ProductDialog({ options, initial, named, close }: { options: string[]; initial: string; named: Record<string, string>; close: (v: string | null) => void }) {
+  const [v, setV] = useState(options.find((o) => o.toLowerCase() === initial.toLowerCase()) || initial);
+  const file = named[v.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()];
+  return (
+    <form className="modal" onSubmit={(e) => { e.preventDefault(); close(v); }}>
+      <h3>Which product is this episode about?</h3>
+      <div className="field">
+        <label htmlFor="ae-product">Product</label>
+        <select id="ae-product" value={v} onChange={(e) => setV(e.target.value)} autoFocus>
+          <option value="">No product (no product disclaimer)</option>
+          {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+      <p className="hint">{v ? (file ? `Its disclaimer, “${file}”, plays just before the closing AI disclaimer.` : `The ${v} disclaimer from the Product Disclaimer category plays just before the closing AI disclaimer. Name the file in the guideline (PRODUCT DISCLAIMERS line) to pick a specific one.`) : 'Only the AI disclaimer will open and close the episode.'}</p>
+      <div className="row">
+        <button type="button" className="btn" onClick={() => close(null)}>Cancel</button>
+        <button type="submit" className="btn primary">Continue</button>
+      </div>
+    </form>
+  );
+}
+
 const DEFAULT_PRODUCTS = ['Home Loan', 'Personal Loan', 'Gold Loan', 'Business Loan', 'Loan Against Property', 'Insurance', 'Fixed Deposit', 'Credit Card'];
 
 export function AutoEditPanel() {
@@ -113,12 +156,16 @@ export function AutoEditPanel() {
   const ctx = async () => {
     const h = useEditor.getState().doc.dialogueHash;
     const buf = h ? getBuffer(h) || (await loadBuffer(h)) : null;
-    return { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products };
+    // the product was just chosen in the product dialog: no guessing from the script (an empty choice means no product)
+    return { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products: [] as string[], productDisclaimers: parseProductDisclaimers(activeGuidelineText()) };
   };
 
   const run = async () => {
     if (!doc.dialogueHash) { toast('Import the episode audio first (top right).', 'error'); return; }
     if (!assets.length) { toast('The audio library is empty. Import the starter library in Audio library.', 'error', 6000); return; }
+    const product = await askProduct();
+    if (product == null) return;
+    edit((d) => { d.product = product; });
     setBusy(true);
     try {
       // no subtitles yet: let Gemini listen to the episode and time the lines first
@@ -216,7 +263,7 @@ export function AutoEditPanel() {
       )}
       <div className="field">
         <label>Product</label>
-        <input list="eddy-products" value={doc.product} placeholder="Picked from the script if empty"
+        <input list="eddy-products" value={doc.product} placeholder="Asked before each auto-edit"
           onFocus={() => useEditor.getState().checkpoint()} onChange={(e) => edit((d) => { d.product = e.target.value; }, false)} />
         <datalist id="eddy-products">{products.map((p) => <option key={p} value={p} />)}</datalist>
       </div>

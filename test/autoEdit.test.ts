@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyTimings, autoEdit, emptyDoc, INTRO_FULL, parseScript, parseSubs, trackFor,
+  applyTimings, autoEdit, emptyDoc, INTRO_FULL, parseProductDisclaimers, parseScript, parseSubs, trackFor,
   type Asset, type Category, type ProjectDoc,
 } from '../src/shared/rules/index';
 
@@ -165,40 +165,30 @@ describe('auto-edit (Bajaj storytelling rules)', () => {
     expect(e.start).toBeGreaterThan(p.start);
   });
 
-  it('plays "2new hl DIS" from the Ending Home Loan Disclaimer category just before the closing AI disclaimer', () => {
-    const endCat: Category = { id: 'k_end_hl', name: 'Ending Home Loan Disclaimer', role: 'pdisclaimer' };
-    const hl = A('hl2', '2new hl DIS', 'k_pdisc', 12, { product: 'Home Loan' });
-    hl.categoryId = 'k_end_hl';
-    const other = A('hlold', 'Old home loan disclaimer', 'k_pdisc', 15, { product: 'Home Loan' });
-    const lib2 = { ...lib, categories: [...cats, endCat], assets: [...lib.assets.filter((a) => a.hash !== 'pdisc'), hl, other] };
-    for (const product of ['Home Loan', '']) {
-      const doc = makeDoc();
-      doc.scriptText = 'SHWETA: Welcome to the show.\nKARAN: Let us talk about planning.\nSHWETA: Thanks for listening!';
-      doc.product = product;
-      autoEdit(doc, lib2);
-      if (!product) doc.product = '';
-      const p = doc.clips.find((c) => c.fixed === 'product'), e = doc.clips.find((c) => c.fixed === 'end')!;
-      expect(p?.assetHash, `product "${product}"`).toBe('hl2');
-      expect(e.start).toBeGreaterThan(p!.start + p!.dur - 0.01);
-      expect(p!.gain).toBe(0);
-    }
-  });
-
-  it('finds the ending disclaimer even when its category has another role and the sound has no product tag', () => {
-    const endCat: Category = { id: 'k_end_hl', name: 'ending home loan disclaimer', role: 'sfx' };
+  it('plays the disclaimer the guideline names for the chosen product ("2new hl DIS" for Home Loan) before the closing AI disclaimer', () => {
+    const pdCat: Category = { id: 'k_pd', name: 'Product Disclaimer', role: 'sfx' }; // even with another role
     const hl = A('hl2', '2new hl DIS', 'k_engage', 12);
-    hl.categoryId = 'k_end_hl'; hl.role = 'sfx'; hl.product = undefined;
-    const lib2 = { ...lib, categories: [...cats, endCat], assets: [...lib.assets.filter((a) => a.hash !== 'pdisc'), hl] };
-    for (const product of ['Home Loan', '']) {
+    hl.categoryId = 'k_pd'; hl.role = 'sfx'; hl.product = undefined;
+    const other = A('hlold', 'Old home loan disclaimer', 'k_pdisc', 15, { product: 'Home Loan' });
+    const named = parseProductDisclaimers('FIXED: x\nPRODUCT DISCLAIMERS (MANDATORY): play it before the closing AI disclaimer. Home Loan: "2new hl DIS"; Personal Loan: "pl dis".');
+    expect(named).toEqual({ 'home loan': '2new hl DIS', 'personal loan': 'pl dis' });
+    const lib2 = { ...lib, products: [], productDisclaimers: named, categories: [...cats, pdCat], assets: [...lib.assets.filter((a) => a.hash !== 'pdisc'), hl, other] };
+    const go = (product: string) => {
       const doc = makeDoc();
-      doc.scriptText = 'SHWETA: Welcome to the show.\nKARAN: Interest rates are low.\nSHWETA: Thanks for listening!';
+      doc.scriptText = 'SHWETA: Welcome to the show about home loans.\nKARAN: Interest rates are low.\nSHWETA: Thanks for listening!';
       doc.product = product;
-      autoEdit(doc, lib2);
-      const p = doc.clips.find((c) => c.fixed === 'product'), e = doc.clips.find((c) => c.fixed === 'end')!;
-      expect(p?.assetHash, `product "${product}"`).toBe('hl2');
-      expect(e.start).toBeGreaterThan(p!.start);
-      expect(doc.clips.filter((c) => c.assetHash === 'hl2').length).toBe(1); // never used as a sound effect too
-    }
+      const rep = autoEdit(doc, lib2);
+      return { doc, rep, p: doc.clips.find((c) => c.fixed === 'product'), e: doc.clips.find((c) => c.fixed === 'end')! };
+    };
+    const h = go('Home Loan');
+    expect(h.p?.assetHash).toBe('hl2');
+    expect(h.e.start).toBeGreaterThan(h.p!.start + h.p!.dur - 0.01);
+    expect(h.p!.gain).toBe(0);
+    expect(h.doc.clips.filter((c) => c.assetHash === 'hl2').length).toBe(1); // never used as a sound effect too
+    // no product chosen: no product disclaimer, even though the script says "home loans"
+    expect(go('').p).toBeUndefined();
+    // named file missing from the library: a clear note
+    expect(go('Personal Loan').rep.notes.join(' ')).toMatch(/pl dis/);
   });
 
   it('keeps manually placed clips through a re-run', () => {
