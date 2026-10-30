@@ -18,6 +18,8 @@ It is Eddy v2 rebuilt for the pipeline's stack and Google Cloud. A browser-only 
 
 **Windows:** double-click `Setup Eddy (Windows).bat`. It installs Node.js if needed, the libraries, a private `.env` (sign in as `admin` / `eddy-local-admin`), runs the tests, builds and starts Eddy on http://localhost:8080. Later, start it with `scripts\windows\start-eddy.bat`.
 
+**Google Cloud mode on your PC** (Firestore and Cloud Storage emulators, no GCP project needed): double-click `Start Eddy (GCP mode).bat` on Windows, or run `npm run build && npm run local:gcp` (needs Python 3; the Cloud Storage emulator is installed with pip automatically). Data is kept in `.data-gcp/` between runs; `npm run local:gcp -- --fresh` starts empty. Gemini needs `GEMINI_API_KEY` in `.env` here, because a PC has no service account.
+
 **macOS / Linux:**
 
 ```bash

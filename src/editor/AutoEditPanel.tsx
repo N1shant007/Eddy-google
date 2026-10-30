@@ -3,7 +3,7 @@ import {
   alignLines, applyTimings, autoEdit, autoEditPrompt, finishEdit, linesFromBlocks, normCues, parseAlignJson, parseJsonLoose,
   parseScript, parseSubs, placeCues, prepareLines, type AutoEditReport, type Cue,
 } from '@eddy/rules';
-import { askAI, useAi } from '../data/ai';
+import { aiProviders, askAI, useAi } from '../data/ai';
 import { AiPicker } from './AiPicker';
 import { copyPasteAI } from '../ui/copyPaste';
 import { useApp } from '../state/app';
@@ -13,10 +13,12 @@ import { IMagic, IUpload } from '../ui/icons';
 import { fmtTime } from './layout';
 
 type Engine = 'rules' | 'team' | 'paste';
-export const activeGuidelineText = () => {
+/** the guideline this project uses: its own choice, else the team default (Guidelines page) */
+export const activeGuideline = (guidelineId?: string | null) => {
   const g = useApp.getState().guidelines;
-  return (g.find((x) => x.isDefault) || g[0])?.text || '';
+  return g.find((x) => x.id === guidelineId) || g.find((x) => x.isDefault) || g[0] || null;
 };
+export const activeGuidelineText = () => activeGuideline(useEditor.getState().doc.guidelineId)?.text || '';
 
 /** Pipeline hand-off: apply the pipeline's subtitles (if any) and run the rules auto-edit, without the panel open. */
 export async function autoEditFromPipeline(subtitles: string | null): Promise<AutoEditReport> {
@@ -48,6 +50,45 @@ export async function autoEditFromPipeline(subtitles: string | null): Promise<Au
   return rep;
 }
 
+/** Gemini on the server, if set up (it can transcribe the episode) */
+export async function geminiModel(): Promise<string | null> {
+  if (!useApp.getState().be.transcribe) return null;
+  const list = await aiProviders();
+  const g = list.find((p) => p.id === 'gemini');
+  if (!g) return null;
+  let saved: { provider?: string; model?: string } | null = null;
+  try { saved = JSON.parse(localStorage.getItem('eddy.ai') || 'null'); } catch { /* ignore */ }
+  return saved?.provider === 'gemini' && saved.model && g.models.includes(saved.model) ? saved.model : g.defaultModel;
+}
+
+/** Gemini listens to the episode and times every line, so no subtitles are needed.
+    With a script: the script keeps its wording and gets exact times. Without one: the transcript becomes the script. */
+export async function transcribeEpisode(model: string): Promise<string> {
+  const { be } = useApp.getState();
+  const s0 = useEditor.getState();
+  const h = s0.doc.dialogueHash;
+  if (!h || !be.transcribe) throw new Error('Import the episode audio first.');
+  const { segments } = await be.transcribe(h, s0.doc.scriptText || '', model);
+  const blocks = segments.map((x) => ({ t0: x.start, t1: x.end, text: (x.speaker ? x.speaker + ': ' : '') + x.text }));
+  const buf = getBuffer(h) || (await loadBuffer(h));
+  const speech = buf ? speechSegments(h) : [], dur = buf?.duration || 0;
+  let msg = '';
+  useEditor.getState().edit((d) => {
+    if ((d.scriptText || '').trim()) {
+      const p = parseScript(d.scriptText);
+      alignLines(p.lines, speech, dur);
+      const n = applyTimings(p.lines, blocks);
+      d.lines = p.lines;
+      msg = `Gemini timed ${n} of ${p.lines.length} script lines`;
+    } else {
+      d.lines = linesFromBlocks(blocks);
+      d.scriptText = d.lines.map((l) => `${l.speaker}: ${l.text}`).join('\n');
+      msg = `Gemini transcribed the episode: ${d.lines.length} timed lines`;
+    }
+  });
+  return msg;
+}
+
 const DEFAULT_PRODUCTS = ['Home Loan', 'Personal Loan', 'Gold Loan', 'Business Loan', 'Loan Against Property', 'Insurance', 'Fixed Deposit', 'Credit Card'];
 
 export function AutoEditPanel() {
@@ -55,10 +96,12 @@ export function AutoEditPanel() {
   const { assets, categories, toast } = useApp();
   const [report, setReport] = useState<AutoEditReport | null>(null);
   const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState('');
   const [showCues, setShowCues] = useState(false);
   const [engine, setEngineS] = useState<Engine>(() => (localStorage.getItem('eddy.engine') as Engine) || 'rules');
   const { list: aiList, choice: aiChoice, provider: aiProv, label: aiLabel } = useAi();
   const ai = aiList && aiList.length ? aiChoice : null;
+  const canTranscribe = !!useApp.getState().be.transcribe && !!aiList?.some((p) => p.id === 'gemini');
   const setEngine = (e: Engine) => { setEngineS(e); try { localStorage.setItem('eddy.engine', e); } catch { /* ignore */ } };
   const eff: Engine = engine === 'team' && !ai ? 'rules' : engine;
   const aiName = aiProv?.name || 'AI';
@@ -68,7 +111,7 @@ export function AutoEditPanel() {
   const exact = doc.lines.filter((l) => l.exact).length;
 
   const ctx = async () => {
-    const h = doc.dialogueHash;
+    const h = useEditor.getState().doc.dialogueHash;
     const buf = h ? getBuffer(h) || (await loadBuffer(h)) : null;
     return { assets, categories, speech: h && buf ? speechSegments(h) : [], dialogueDur: buf?.duration || 0, products };
   };
@@ -78,6 +121,16 @@ export function AutoEditPanel() {
     if (!assets.length) { toast('The audio library is empty. Import the starter library in Audio library.', 'error', 6000); return; }
     setBusy(true);
     try {
+      // no subtitles yet: let Gemini listen to the episode and time the lines first
+      if (!useEditor.getState().doc.lines.some((l) => l.exact)) {
+        const gm = await geminiModel();
+        if (gm) {
+          setStage('Gemini is listening to the episode…');
+          try { toast(await transcribeEpisode(gm), 'ok', 5000); }
+          catch (e: any) { toast(`${e?.message || e} Timing the lines from the speech pauses instead.`, 'error', 8000); }
+          finally { setStage(''); }
+        }
+      }
       const c = await ctx();
       let rep!: AutoEditReport;
       if (eff === 'rules') {
@@ -147,7 +200,7 @@ export function AutoEditPanel() {
   return (
     <div className="insp">
       <div className="field">
-        <label>Script <span className="val" style={{ fontWeight: 400, color: 'var(--muted)' }}>{parsedCount ? `${parsedCount} lines` : ''}{exact ? ` · ${exact} timed by subtitles` : ''}</span></label>
+        <label>Script <span className="val" style={{ fontWeight: 400, color: 'var(--muted)' }}>{parsedCount ? `${parsedCount} lines` : ''}{exact ? ` · ${exact} timed exactly` : ''}</span></label>
         <textarea value={doc.scriptText} spellCheck={false} placeholder={'SHWETA: Welcome to the show…\nKARAN: Today we talk about…\n[SFX: whoosh]'}
           onFocus={() => useEditor.getState().checkpoint()}
           onChange={(e) => edit((d) => { d.scriptText = e.target.value; }, false)} style={{ minHeight: 150, fontSize: 12.5 }} />
@@ -158,6 +211,9 @@ export function AutoEditPanel() {
         <button className="btn sm" onClick={() => scriptFile.current?.click()}><IUpload /> Script file</button>
         <button className="btn sm" onClick={() => subsFile.current?.click()}><IUpload /> Subtitles (.srt)</button>
       </div>
+      {canTranscribe && !exact && (
+        <p className="hint" style={{ marginTop: -6, marginBottom: 12 }}>Subtitles are optional: Gemini listens to the episode and times every line when you press Auto-edit (no script needed either).</p>
+      )}
       <div className="field">
         <label>Product</label>
         <input list="eddy-products" value={doc.product} placeholder="Picked from the script if empty"
@@ -169,6 +225,7 @@ export function AutoEditPanel() {
         <input value={doc.settings.hosts} placeholder="e.g. Shweta, Karan" onFocus={() => useEditor.getState().checkpoint()}
           onChange={(e) => edit((d) => { d.settings.hosts = e.target.value; }, false)} />
       </div>
+      <GuidelinePicker />
       <div className="field"><label>Who edits</label></div>
       <div className="seg" role="radiogroup" aria-label="Who edits">
         <button role="radio" aria-checked={eff === 'rules'} className={eff === 'rules' ? 'on' : ''} onClick={() => setEngine('rules')}>Rules (instant)</button>
@@ -177,7 +234,7 @@ export function AutoEditPanel() {
       </div>
       {eff === 'team' && <AiPicker />}
       <button className="btn primary" style={{ width: '100%', justifyContent: 'center', padding: 10 }} disabled={busy} onClick={run}>
-        <IMagic /> {busy ? (eff === 'team' ? `${aiName} is editing…` : 'Editing…') : doc.cues.length ? 'Auto-edit again' : 'Auto-edit'}
+        <IMagic /> {busy ? (stage || (eff === 'team' ? `${aiName} is editing…` : 'Editing…')) : doc.cues.length ? 'Auto-edit again' : 'Auto-edit'}
       </button>
       <p className="hint" style={{ marginTop: 8 }}>
         {eff === 'rules'
@@ -187,7 +244,7 @@ export function AutoEditPanel() {
       </p>
       {report && (
         <div className="report">
-          <b>{report.placed} sounds placed</b> from {report.cues} cues · {report.lines} lines{report.exactLines ? `, ${report.exactLines} timed by subtitles` : ''}
+          <b>{report.placed} sounds placed</b> from {report.cues} cues · {report.lines} lines{report.exactLines ? `, ${report.exactLines} timed exactly` : ''}
           {report.notes.map((n, i) => <div key={i} className="note">{n}</div>)}
         </div>
       )}
@@ -209,6 +266,26 @@ export function AutoEditPanel() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** per-project choice of editing guideline; saved with the project and its versions */
+function GuidelinePicker() {
+  const { doc, edit } = useEditor();
+  const guidelines = useApp((s) => s.guidelines);
+  const def = guidelines.find((x) => x.isDefault) || guidelines[0];
+  const chosen = guidelines.find((x) => x.id === doc.guidelineId);
+  if (!guidelines.length) return null;
+  return (
+    <div className="field">
+      <label htmlFor="ae-guideline">Guideline</label>
+      <select id="ae-guideline" value={chosen ? chosen.id : ''} style={{ width: '100%' }}
+        onChange={(e) => { const v = e.target.value || null; edit((d) => { d.guidelineId = v; }); }}>
+        <option value="">Team default{def ? ` (${def.name})` : ''}</option>
+        {guidelines.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+      </select>
+      <p className="hint" style={{ margin: '4px 0 0' }}>AI and Copy-paste Claude follow this guideline. Rules (instant) always applies the Bajaj storytelling rules.</p>
     </div>
   );
 }

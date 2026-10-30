@@ -2,14 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Clip, ProjectDoc } from '@eddy/rules';
 import { useApp } from '../state/app';
 import { kindForRole, pruneTracks, trackFor, useEditor } from '../state/editor';
-import { encodeMp3, loadAll, loadBuffer, Player, projectEnd, renderMix, SPEEDS } from '../audio/engine';
-import { askText, openDialog, openMenu } from '../ui/dialogs';
+import { encodeMp3, getBuffer, loadAll, loadBuffer, Player, projectEnd, renderMix, SPEEDS } from '../audio/engine';
+import { askText, confirmBox, openDialog, openMenu } from '../ui/dialogs';
 import { IBack, ICopy, IDownload, IHistory, IPause, IPlay, IRedo, ISave, IScissors, IStart, IStop, ITrash, IUndo, IUpload } from '../ui/icons';
 import { HistoryDrawer } from '../projects/HistoryDrawer';
 import { Timeline } from './Timeline';
 import { ClipInspector } from './ClipInspector';
 import { LibraryPanel } from './LibraryPanel';
-import { AutoEditPanel, autoEditFromPipeline } from './AutoEditPanel';
+import { AutoEditPanel, autoEditFromPipeline, geminiModel, transcribeEpisode } from './AutoEditPanel';
 import { AskPanel } from './AskPanel';
 import { fmtTime } from './layout';
 import type { Project, ProjectMeta } from '../data/types';
@@ -26,6 +26,8 @@ export function EditorView({ projectId }: { projectId: string }) {
   const [meta, setMeta] = useState<ProjectMeta | null>(null);
   const [pipe, setPipe] = useState<Project['pipeline']>(null);
   const [loading, setLoading] = useState(true);
+  /** audio still downloading for this project (the editor opens before it arrives) */
+  const [audioProg, setAudioProg] = useState<{ done: number; total: number } | null>(null);
   const [tab, setTab] = useState<Tab>('auto');
   const [history, setHistory] = useState(false);
   const [histKey, setHistKey] = useState(0);
@@ -43,7 +45,9 @@ export function EditorView({ projectId }: { projectId: string }) {
         setMeta(m as ProjectMeta);
         setPipe(pipeline);
         useEditor.getState().load(projectId, draft);
-        await loadAll(draft.clips.map((c) => c.assetHash));
+        // open the editor straight away; the audio streams in behind it (episode audio first)
+        setLoading(false);
+        await loadWithProgress(draft.clips.map((c) => c.assetHash), draft.dialogueHash, (done, total) => { if (alive) setAudioProg(done < total ? { done, total } : null); });
         // audio sent by the pipeline arrives without a length: fill it in from the decoded file
         if (draft.clips.some((c) => !c.dur)) {
           const bufs = await Promise.all(draft.clips.filter((c) => !c.dur).map((c) => loadBuffer(c.assetHash)));
@@ -99,7 +103,9 @@ export function EditorView({ projectId }: { projectId: string }) {
   };
   const togglePlay = useCallback(async () => {
     const s = useEditor.getState();
-    if (player.playing) { const p = player.position(); player.stop(); s.setPlaying(false); s.setPlayhead(p); return; }
+    if (player.playing || s.playing) { const p = player.playing ? player.position() : s.playhead; player.stop(); s.setPlaying(false); s.setPlayhead(p); return; }
+    const missing = [...new Set(s.doc.clips.map((c) => c.assetHash))].filter((h) => !getBuffer(h)).length;
+    if (missing) toast(`Loading ${missing} sound${missing > 1 ? 's' : ''}… playback starts as soon as they arrive.`, undefined, 4000);
     let from = s.playhead;
     if (from >= projectEnd(s.doc) - 0.05) from = 0;
     await startAt(from);
@@ -108,6 +114,7 @@ export function EditorView({ projectId }: { projectId: string }) {
   const playFromStart = useCallback(async () => {
     const s = useEditor.getState();
     player.stop();
+    s.setPlaying(false);
     s.setPlayhead(0); s.setScroll(0);
     await startAt(0);
   }, []);
@@ -151,6 +158,22 @@ export function EditorView({ projectId }: { projectId: string }) {
     await loadBuffer(hash);
     useEditor.getState().addAsset(a, t);
     toast(`Added ${a.name} at ${fmtTime(t, true)}`, undefined, 1800);
+  };
+
+  /** remove every sound placed on the timeline (music, SFX, disclaimers, intro/outro); the episode audio and script stay */
+  const clearAll = async () => {
+    const s = useEditor.getState();
+    const n = s.doc.clips.filter((c) => c.assetHash !== s.doc.dialogueHash).length;
+    if (!n && !s.doc.cues.length) { toast('Nothing to clear: only the episode audio is on the timeline.'); return; }
+    if (!(await confirmBox('Clear all sounds?', `Removes all ${n} sounds from the timeline (music, sound effects, disclaimers, intro and outro). The episode audio and the script stay. Ctrl+Z undoes it.`, 'Clear all'))) return;
+    if (player.playing) { player.stop(); s.setPlaying(false); }
+    s.edit((d) => {
+      d.clips = d.clips.filter((c) => c.assetHash === d.dialogueHash);
+      d.cues = [];
+      pruneTracks(d);
+    });
+    s.select(null);
+    toast(`Cleared ${n} sounds · Ctrl+Z to undo`, 'ok');
   };
 
   /* ---------- keyboard ---------- */
@@ -200,9 +223,12 @@ export function EditorView({ projectId }: { projectId: string }) {
   /* ---------- import main dialogue ---------- */
   const importMain = async (f: File | undefined) => {
     if (!f) return;
+    const ctl = { set: (_p: number, _l: string) => {}, close: () => {} };
+    openDialog((close) => <ExportDialog title={`Importing ${f.name}`} ctl={ctl} close={close} />);
     try {
-      toast(`Uploading ${f.name}…`);
-      const hash = await be.putAudio(f);
+      ctl.set(0.01, `Uploading ${(f.size / 1048576).toFixed(1)} MB…`);
+      const hash = await be.putAudio(f, (p) => ctl.set(p * 0.9, `Uploading… ${Math.round(p * 100)}% of ${(f.size / 1048576).toFixed(1)} MB`));
+      ctl.set(0.93, 'Reading the audio…');
       const buf = await loadBuffer(hash);
       if (!buf) throw new Error('This file can’t be read as audio.');
       useEditor.getState().edit((d) => {
@@ -210,11 +236,27 @@ export function EditorView({ projectId }: { projectId: string }) {
         d.clips = d.clips.filter((c) => c.trackId !== t.id);
         d.clips.push({ id: uid('c_'), trackId: t.id, assetHash: hash, start: 0, offset: 0, dur: Math.round(buf.duration * 100) / 100, gain: 0, fadeIn: 0, fadeOut: 0, loop: false });
         d.dialogueHash = hash;
+        d.lines = d.lines.map((l) => ({ ...l, exact: false })); // new audio: old timings no longer apply
       });
       setTimeout(fit, 50);
-      toast('Episode audio imported. Paste the script or subtitles in Auto-edit next.', 'ok', 5000);
       setTab('auto');
-    } catch (e: any) { toast(e?.message || String(e), 'error', 6000); }
+      // with Gemini on the server: transcribe the episode and build the edit straight away
+      const gm = await geminiModel();
+      const placed = useEditor.getState().doc.clips.some((c) => c.assetHash !== hash);
+      if (gm && !placed) {
+        ctl.set(0.96, 'Gemini is listening to the episode and timing every line…');
+        let note = '';
+        try { note = await transcribeEpisode(gm); }
+        catch (e: any) { toast(`${e?.message || e} The auto-edit will time the lines from the speech pauses.`, 'error', 8000); }
+        ctl.set(0.99, 'Auto-editing…');
+        const rep = await autoEditFromPipeline(null);
+        ctl.set(1, 'Done');
+        toast(`${note ? note + '. ' : ''}Auto-edit placed ${rep.placed} sounds. Review it, then Save version.`, 'ok', 8000);
+      } else {
+        ctl.set(1, 'Done');
+        toast(gm ? 'Episode audio imported. Press Auto-edit: Gemini will time the lines.' : 'Episode audio imported. Paste the script or subtitles in Auto-edit next.', 'ok', 6000);
+      }
+    } catch (e: any) { ctl.close(); toast(e?.message || String(e), 'error', 8000); }
   };
 
   /* ---------- versions ---------- */
@@ -301,13 +343,15 @@ export function EditorView({ projectId }: { projectId: string }) {
         <button className="btn icon" title="Play from the beginning (Home)" aria-label="Play from the beginning" onClick={playFromStart}><IStart /></button>
         <button className="btn icon play" title="Play / pause (Space)" onClick={togglePlay}>{ed.playing ? <IPause /> : <IPlay />}</button>
         <button className="btn icon" title="Stop" onClick={stop}><IStop /></button>
-        <span className="time">{fmtTime(ed.playhead, true)}</span>
+        <Clock livePos={livePos} />
         <select className="btn sm speed" value={speed} onChange={(e) => setSpeed(+e.target.value)} title="Playback speed ([ and ])" aria-label="Playback speed">
           {SPEEDS.map((v) => <option key={v} value={v}>{v}×</option>)}
         </select>
         <button className="btn sm" onClick={() => ed.setZoom(ed.pps / 1.5)} title="Zoom out (−)">−</button>
         <button className="btn sm" onClick={() => ed.setZoom(ed.pps * 1.5)} title="Zoom in (+)">+</button>
         <button className="btn sm" onClick={fit} title="Fit (F)">Fit</button>
+        <button className="btn sm danger" onClick={clearAll} title="Remove all music, sound effects, disclaimers and intro/outro (keeps the episode audio and script)"><ITrash /> Clear all</button>
+        {audioProg && <span className="tag" title="The sounds download once; next time they open from this computer">Loading audio {audioProg.done}/{audioProg.total}…</span>}
         <div className="grow" />
         <input ref={fileRef} type="file" accept="audio/*,.mp3,.wav,.m4a" hidden onChange={(e) => { importMain(e.target.files?.[0]); e.target.value = ''; }} />
         <button className="btn" onClick={() => fileRef.current?.click()}><IUpload /> {hasDialogue ? 'Replace audio' : 'Import episode audio'}</button>
@@ -370,3 +414,35 @@ function Keys() {
 
 // re-exported for other panels
 export { kindForRole, pruneTracks };
+
+/** the time readout: follows the playhead live while playing */
+function Clock({ livePos }: { livePos: () => number | null }) {
+  const playhead = useEditor((s) => s.playhead);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const p = livePos();
+      if (p != null && ref.current) ref.current.textContent = fmtTime(p, true);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [livePos]);
+  return <span className="time" ref={ref}>{fmtTime(playhead, true)}</span>;
+}
+
+/** loads the audio a project needs, episode audio first, reporting progress */
+async function loadWithProgress(hashes: string[], first: string | null | undefined, onProgress: (done: number, total: number) => void) {
+  const all = [...new Set(hashes)];
+  const order = first && all.includes(first) ? [first, ...all.filter((h) => h !== first)] : all;
+  let done = order.filter((h) => getBuffer(h)).length;
+  onProgress(done, order.length);
+  if (first && order[0] === first && !getBuffer(first)) { await loadBuffer(first).catch(() => null); done++; onProgress(done, order.length); }
+  const rest = order.filter((h) => !getBuffer(h));
+  // a few at a time, so the episode and saves are not stuck behind a pile of downloads on a slow connection
+  let i = 0;
+  const worker = async () => { while (i < rest.length) { const h = rest[i++]; await loadBuffer(h).catch(() => null); done++; onProgress(Math.min(done, order.length), order.length); } };
+  await Promise.all(Array.from({ length: Math.min(4, rest.length) }, worker));
+  onProgress(order.length, order.length);
+}

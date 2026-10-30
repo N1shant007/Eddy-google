@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../state/app';
+import { withHouseRules } from '../data/houseRules';
 import { uid } from '../data/util';
 import { askText } from '../ui/dialogs';
 import { IPlus, ISave } from '../ui/icons';
@@ -30,7 +31,7 @@ export function GuidelinesView() {
           const name = await askText('New guidelines', '', 'Create', 'Name');
           if (!name) return;
           const id = uid('g_');
-          await be.saveGuideline({ id, name, text: g?.text || '' });
+          await be.saveGuideline({ id, name, text: withHouseRules(g?.text || '') });
           await refreshLibrary(); setSel(id);
         }}><IPlus /></button></h4>
         <div className="tree">

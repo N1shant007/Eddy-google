@@ -18,7 +18,7 @@ import { makeStore, type Store } from './server/store.js';
 import { makeBlobs, type Blobs } from './server/blobs.js';
 import { dataRoutes, errorHandler } from './server/routes/data.js';
 import { audioRoutes } from './server/routes/audio.js';
-import { aiMode, aiRoutes, aiReady } from './server/routes/ai.js';
+import { aiMode, aiRoutes, aiReady, transcribeRoutes } from './server/routes/ai.js';
 import { pipelineRoutes } from './server/routes/pipeline.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -38,7 +38,7 @@ export function createApi(store: Store = makeStore(), blobs: Blobs = makeBlobs()
   app.get('/healthz', health);
   app.get('/api/health', health);
   app.use('/api', sessionRoutes(store));
-  app.use('/api', requireUser(store), userRoutes(store), dataRoutes(store), audioRoutes(blobs), aiRoutes(), pipelineRoutes(store, blobs));
+  app.use('/api', requireUser(store), userRoutes(store), dataRoutes(store), audioRoutes(blobs), aiRoutes(), transcribeRoutes(blobs), pipelineRoutes(store, blobs));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
   app.use(errorHandler);
   return app;

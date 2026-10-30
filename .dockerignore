@@ -16,3 +16,4 @@ Setup Eddy (Windows).bat
 setup-log.txt
 setup-result.json
 *.md
+.data-gcp

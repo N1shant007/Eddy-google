@@ -231,6 +231,44 @@ describe('API key stays secret', () => {
   });
 });
 
+describe('Gemini transcription', () => {
+  const audio = Buffer.from('ID3 episode audio for transcription');
+  const hash = createHash('sha256').update(audio).digest('hex');
+  it('sends the episode audio and script to Gemini and returns timed lines', async () => {
+    await call(`/api/audio/${hash}`, { method: 'PUT', body: audio, headers: { 'Content-Type': 'audio/mpeg' } });
+    let seen: any = null;
+    aiMod.setTranscribe(async (model: string, a: any, script: string) => {
+      seen = { model, mime: a.mime, bytes: a.data ? a.data.length : 0, uri: a.uri || null, script };
+      return '```json\n{"segments":[{"start":"0:02.5","end":6.1,"speaker":"shweta","text":"Welcome to the show."},{"start":6.4,"end":9,"speaker":"KARAN","text":"Thanks Shweta."},{"start":3,"end":2,"speaker":"X","text":"bad"}]}\n```';
+    });
+    const r = await call('/api/transcribe', { method: 'POST', json: { hash, script: 'SHWETA: Welcome to the show.\nKARAN: Thanks Shweta.' } });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.segments).toEqual([
+      { start: 2.5, end: 6.1, speaker: 'SHWETA', text: 'Welcome to the show.' },
+      { start: 6.4, end: 9, speaker: 'KARAN', text: 'Thanks Shweta.' },
+    ]);
+    expect(seen.model).toBe('gemini-2.5-flash');
+    expect(seen.mime).toBe('audio/mpeg');
+    expect(seen.script).toContain('KARAN: Thanks Shweta.');
+    if (gcp) expect(seen.bytes + (seen.uri ? 1 : 0)).toBeGreaterThan(0); else expect(seen.bytes).toBe(audio.length);
+  });
+  it('explains when Gemini fails, without leaking the key', async () => {
+    aiMod.setTranscribe(async () => { throw new Error(`denied for key=${FAKE_KEY}`); });
+    const r = await call('/api/transcribe', { method: 'POST', json: { hash } });
+    const body = await r.text();
+    expect(r.status).toBe(502);
+    expect(body).not.toContain(FAKE_KEY);
+    aiMod.setTranscribe(async () => '{"segments":[]}');
+    expect((await call('/api/transcribe', { method: 'POST', json: { hash } })).status).toBe(502);
+  });
+  it('needs uploaded audio and a session', async () => {
+    expect((await call('/api/transcribe', { method: 'POST', json: { hash: 'f'.repeat(64) } })).status).toBe(404);
+    expect((await call('/api/transcribe', { method: 'POST', json: { hash: 'nope' } })).status).toBe(400);
+    expect((await call('/api/transcribe', { method: 'POST', json: { hash }, auth: 'none' })).status).toBe(401);
+  });
+});
+
 describe('pipeline hand-off', () => {
   let id = '';
   it('needs the pipeline token', async () => {

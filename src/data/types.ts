@@ -109,7 +109,9 @@ export interface Backend {
   /** audio bytes for decoding/playback */
   getAudio(hash: string): Promise<Blob | null>;
   /** stores bytes without a library record (e.g. an episode's main dialogue) */
-  putAudio(file: Blob): Promise<string>;
+  putAudio(file: Blob, onProgress?: (p: number) => void): Promise<string>;
+  /** Gemini listens to the audio and returns timed lines (server with Gemini only) */
+  transcribe?(hash: string, script: string, model?: string): Promise<{ segments: { start: number; end: number; speaker: string; text: string }[]; model: string }>;
 
   listGuidelines(): Promise<Guideline[]>;
   saveGuideline(g: Guideline): Promise<void>;

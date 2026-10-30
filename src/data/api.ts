@@ -9,9 +9,23 @@ export class ApiError extends Error { constructor(public status: number, msg: st
 let onSignedOut: (() => void) | null = null;
 export const setSignedOutHandler = (f: () => void) => { onSignedOut = f; };
 
+export const OFFLINE_MSG = 'Can’t reach the Eddy server. Check your internet connection (or VPN / office firewall) and try again. Nothing was lost: your edits stay in this tab.';
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** fetch that rides out short network drops: up to 4 tries (1 s, 3 s, 6 s apart) when the request never got an answer.
+    Requests that did get an answer (any HTTP status) are never repeated. */
+export async function netFetch(url: string, init: RequestInit = {}, tries = 4): Promise<Response> {
+  for (let i = 0; ; i++) {
+    try { return await fetch(url, init); }
+    catch (e: any) {
+      if (e?.name === 'AbortError' || i >= tries - 1) throw new ApiError(0, OFFLINE_MSG);
+      await sleep([1000, 3000, 6000][i] ?? 6000);
+    }
+  }
+}
+
 export async function api<T = any>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, ...rest } = init;
-  const r = await fetch('/api' + path, {
+  const r = await netFetch('/api' + path, {
     credentials: 'same-origin',
     ...rest,
     headers: { ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(rest.headers || {}) },
@@ -102,7 +116,7 @@ export class ApiBackend implements Backend {
     const cache = 'caches' in self ? await caches.open('eddy-audio').catch(() => null) : null;
     let res = cache ? await cache.match(url) : undefined;
     if (!res) {
-      res = await fetch(url, { credentials: 'same-origin' });
+      res = await netFetch(url, { credentials: 'same-origin' });
       if (res.status === 401) onSignedOut?.();
       if (!res.ok) return null;
       if (cache) await cache.put(url, res.clone()).catch(() => {}); // content-addressed: safe to keep
@@ -115,7 +129,7 @@ export class ApiBackend implements Backend {
   async putAudio(file: Blob, onProgress?: (p: number) => void): Promise<string> {
     const hash = await sha256(file);
     const type = file.type || 'application/octet-stream';
-    const head = await fetch(`/api/audio/${hash}`, { method: 'HEAD', credentials: 'same-origin' });
+    const head = await netFetch(`/api/audio/${hash}`, { method: 'HEAD', credentials: 'same-origin' });
     if (!head.ok) {
       if (file.size <= PART) {
         await api(`/audio/${hash}`, { method: 'PUT', headers: { 'Content-Type': type }, body: file });
@@ -134,6 +148,10 @@ export class ApiBackend implements Backend {
     onProgress?.(1);
     this.blobCache.set(hash, file);
     return hash;
+  }
+
+  transcribe(hash: string, script: string, model?: string) {
+    return api<{ segments: { start: number; end: number; speaker: string; text: string }[]; model: string }>('/transcribe', { method: 'POST', json: { hash, script, model } });
   }
 
   /* ---------- hand-off ---------- */

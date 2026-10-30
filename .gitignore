@@ -12,3 +12,5 @@ dist-demo
 
 setup-log.txt
 setup-result.json
+.data-gcp/
+dist-single

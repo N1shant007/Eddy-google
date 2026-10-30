@@ -1,6 +1,6 @@
 import { openDB, type IDBPDatabase } from 'idb';
 import type { Asset, Category, Guideline, ProjectDoc } from '@eddy/rules';
-import type { Backend, Folder, Project, ProjectMeta, UserInfo, Version, VersionMeta } from './types';
+import type { Account, Backend, Folder, Project, ProjectMeta, UserInfo, Version, VersionMeta } from './types';
 import { nowIso, sha256, uid } from './util';
 import { descendants } from '../projects/folderOps';
 
@@ -28,17 +28,82 @@ export class DemoBackend implements Backend {
     });
   }
 
+  /* ---------- demo accounts (this browser only; the server keeps real ones in Firestore) ---------- */
+  private memUsers: (Account & { pw: string })[] | null = null;
+  private async pwHash(pw: string) {
+    const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('eddy-demo:' + pw));
+    return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  private async users(): Promise<(Account & { pw: string })[]> {
+    if (!this.memUsers) {
+      try { this.memUsers = JSON.parse(localStorage.getItem('eddy.demo.users') || 'null'); } catch { /* storage blocked */ }
+      if (!this.memUsers?.length) this.memUsers = [{ username: 'admin', name: 'Admin', role: 'admin', disabled: false, createdAt: nowIso(), createdBy: null, updatedAt: null, pw: await this.pwHash('demo') }];
+    }
+    return this.memUsers;
+  }
+  private saveUsers() { try { localStorage.setItem('eddy.demo.users', JSON.stringify(this.memUsers)); } catch { /* storage blocked */ } }
+  private me(): string | null { try { return sessionStorage.getItem('eddy.demo.user'); } catch { return this.memMe; } }
+  private memMe: string | null = null;
+  private setMe(u: string | null) { this.memMe = u; try { if (u) sessionStorage.setItem('eddy.demo.user', u); else sessionStorage.removeItem('eddy.demo.user'); } catch { /* ignore */ } }
+  private info = (u: Account): UserInfo => ({ id: u.username, email: '', name: u.name, username: u.username, role: u.role });
+  private async admin() {
+    const u = (await this.users()).find((x) => x.username === this.me());
+    if (u?.role !== 'admin') throw new Error('Only an admin can do this.');
+  }
+
   async user(): Promise<UserInfo | null> {
-    try { const n = sessionStorage.getItem('eddy.demo.user'); return n ? { id: n, email: '', name: n, username: n, role: 'editor' } : null; } catch { return null; }
+    const u = (await this.users()).find((x) => x.username === this.me() && !x.disabled);
+    return u ? this.info(u) : null;
   }
-  /** demo: any username, password "demo" (user accounts live on the server) */
+  /** demo: starts with admin / demo; admin adds more users on the Users page */
   async signIn(username: string, password: string): Promise<UserInfo> {
-    if (password.trim().toLowerCase() !== 'demo') throw new Error('That password is not right. In this demo the password is “demo”.');
-    const n = username.trim() || 'demo';
-    try { sessionStorage.setItem('eddy.demo.user', n); } catch { /* ignore */ }
-    return { id: n, email: '', name: n, username: n, role: 'editor' };
+    const u = (await this.users()).find((x) => x.username === username.trim().toLowerCase());
+    if (!u || u.pw !== (await this.pwHash(password))) throw new Error('That username or password is not right. In this test build, sign in as admin with the password “demo”.');
+    if (u.disabled) throw new Error('This account is disabled. Ask an admin.');
+    this.setMe(u.username);
+    return this.info(u);
   }
-  async signOut() { try { sessionStorage.removeItem('eddy.demo.user'); } catch { /* ignore */ } }
+  accounts = {
+    list: async () => { await this.admin(); return (await this.users()).map(({ pw: _p, ...a }) => a).sort((a, b) => a.username.localeCompare(b.username)); },
+    add: async (a: { username: string; name: string; password: string; role: 'admin' | 'editor' }) => {
+      await this.admin();
+      const list = await this.users(), username = a.username.trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9._-]{1,31}$/.test(username)) throw new Error('Usernames are 2–32 characters: lowercase letters, digits, dot, dash or underscore.');
+      if (list.some((x) => x.username === username)) throw new Error(`“${username}” already exists.`);
+      if (a.password.length < 8) throw new Error('Passwords need at least 8 characters.');
+      const u = { username, name: a.name || username, role: a.role, disabled: false, createdAt: nowIso(), createdBy: this.me(), updatedAt: null, pw: await this.pwHash(a.password) };
+      list.push(u); this.saveUsers();
+      const { pw: _p, ...out } = u; return out;
+    },
+    update: async (username: string, patch: Partial<{ name: string; password: string; role: 'admin' | 'editor'; disabled: boolean }>) => {
+      await this.admin();
+      const list = await this.users(), u = list.find((x) => x.username === username);
+      if (!u) throw new Error('User not found');
+      const admins = list.filter((x) => x.role === 'admin' && !x.disabled).length;
+      if (u.role === 'admin' && !u.disabled && admins <= 1 && ((patch.role && patch.role !== 'admin') || patch.disabled)) throw new Error('Keep at least one active admin.');
+      if (patch.password != null) { if (patch.password.length < 8) throw new Error('Passwords need at least 8 characters.'); u.pw = await this.pwHash(patch.password); }
+      if (patch.name != null) u.name = patch.name;
+      if (patch.role) u.role = patch.role;
+      if (patch.disabled != null) u.disabled = patch.disabled;
+      u.updatedAt = nowIso(); this.saveUsers();
+      const { pw: _p, ...out } = u; return out;
+    },
+    remove: async (username: string) => {
+      await this.admin();
+      const list = await this.users(), u = list.find((x) => x.username === username);
+      if (!u) throw new Error('User not found');
+      if (username === this.me()) throw new Error('You can’t remove your own account.');
+      if (u.role === 'admin' && !u.disabled && list.filter((x) => x.role === 'admin' && !x.disabled).length <= 1) throw new Error('Keep at least one active admin.');
+      this.memUsers = list.filter((x) => x.username !== username); this.saveUsers();
+    },
+    changeOwnPassword: async (current: string, next: string) => {
+      const u = (await this.users()).find((x) => x.username === this.me());
+      if (!u || u.pw !== (await this.pwHash(current))) throw new Error('Your current password is not right.');
+      if (next.length < 8) throw new Error('Passwords need at least 8 characters.');
+      u.pw = await this.pwHash(next); u.updatedAt = nowIso(); this.saveUsers();
+    },
+  };
+  async signOut() { this.setMe(null); }
   async markAutoEdited(_id: string) { /* demo projects don't come from the pipeline */ }
   /** demo: no Cloud Storage or Drive, so the final mix is downloaded instead */
   async sendFinal(_projectId: string, mp3: Blob, filename: string) {
