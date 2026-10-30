@@ -120,7 +120,7 @@ step "7/7 Check"
 URL=$(g run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')
 auth=(); [[ "$PUBLIC" == yes ]] || auth=(-H "Authorization: Bearer $(gcloud auth print-identity-token)")
 ok=''
-for _ in 1 2 3 4 5 6; do curl -fsS "${auth[@]}" "$URL/api/health" && { ok=1; echo; break; }; sleep 5; done
+for _ in 1 2 3 4 5 6; do curl -fsS ${auth[@]+"${auth[@]}"} "$URL/api/health" && { ok=1; echo; break; }; sleep 5; done
 if [[ -z "$ok" ]]; then
   echo "Eddy did not answer at $URL/api/health. Logs: gcloud run services logs read $SERVICE --region $REGION --project $PROJECT"
   exit 1

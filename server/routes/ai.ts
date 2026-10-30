@@ -133,6 +133,9 @@ export function aiRoutes() {
 
 /* ---------- transcription (Gemini listens to the episode and returns timed lines) ---------- */
 export interface Segment { start: number; end: number; speaker: string; text: string }
+/** a transcript of a long episode fits well within this; a stuck model is cut off long before the 65k limit */
+const TRANSCRIBE_MAX_TOKENS = 24_576;
+const TRANSCRIBE_TIMEOUT_MS = Number(process.env.GEMINI_TRANSCRIBE_TIMEOUT_MS || 90_000);
 const INLINE_MAX = 14 * 1024 * 1024; // Gemini's request cap is 20 MB, and inline audio grows by a third in base64
 const audioMime = (t: string) => (/^audio\//.test(t) ? t : 'audio/mpeg');
 
@@ -144,30 +147,49 @@ function transcribePrompt(script: string) {
     'start and end are seconds from the beginning of the audio (2 decimals). One segment per turn of speech, in order, no overlaps. Cover the whole audio.',
     'Speaker: the speaker\'s name in capitals if it is said or clear from the conversation, otherwise HOST 1, HOST 2, GUEST.',
     'Keep the words exactly as spoken (Hindi or Hinglish words stay as spoken, in Latin letters).',
+    'Never repeat text or numbers. If a stretch has no speech, skip it. Stop when the audio ends.',
     ...(s ? ['The episode was recorded from this script. Use the script\'s speaker names and wording, one segment per script line in the same order, and give the time each line is spoken:', s.slice(0, 60_000)] : []),
   ].join('\n');
 }
 
 export function parseSegments(text: string): Segment[] {
-  let j: any;
-  try { j = JSON.parse(text); } catch { const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/); j = m ? JSON.parse(m[0]) : null; }
-  const arr = Array.isArray(j) ? j : j?.segments;
-  if (!Array.isArray(arr)) return [];
-  const num = (v: any) => (typeof v === 'number' ? v : /:/.test(String(v)) ? String(v).split(':').reduce((a, x) => a * 60 + +x, 0) : +v);
-  return arr.map((x: any) => ({ start: num(x.start), end: num(x.end), speaker: String(x.speaker || '').trim().toUpperCase().slice(0, 30), text: String(x.text || '').trim() }))
-    .filter((x) => isFinite(x.start) && isFinite(x.end) && x.end >= x.start && x.text)
-    .sort((a, b) => a.start - b.start);
+  const clean = (arr: any[]): Segment[] => {
+    const num = (v: any) => (typeof v === 'number' ? v : /:/.test(String(v)) ? String(v).split(':').reduce((a, x) => a * 60 + +x, 0) : +v);
+    return arr.map((x: any) => ({ start: num(x?.start), end: num(x?.end), speaker: String(x?.speaker || '').trim().toUpperCase().slice(0, 30), text: String(x?.text || '').trim() }))
+      .filter((x) => isFinite(x.start) && isFinite(x.end) && x.end >= x.start && x.text)
+      .sort((a, b) => a.start - b.start);
+  };
+  const body = String(text || '').replace(/^```(?:json)?\s*|\s*```\s*$/g, '');
+  try {
+    const j = JSON.parse(body);
+    const arr = Array.isArray(j) ? j : j?.segments;
+    if (Array.isArray(arr)) return clean(arr);
+  } catch { /* cut off or wrapped: salvage the complete segments below */ }
+  // a reply cut off mid-way (e.g. the model hit its output limit): keep every complete {...} segment
+  const parts: any[] = [];
+  for (const m of body.matchAll(/\{[^{}]*\}/g)) { try { parts.push(JSON.parse(m[0])); } catch { /* incomplete piece */ } }
+  return clean(parts);
 }
 
 /** replaceable in tests */
 export let transcribeAudio = async (model: string, audio: { uri?: string; data?: Buffer; mime: string }, script: string): Promise<string> => {
   const part = audio.uri ? { fileData: { fileUri: audio.uri, mimeType: audio.mime } } : { inlineData: { data: audio.data!.toString('base64'), mimeType: audio.mime } };
-  const r = await gemini().models.generateContent({
-    model,
-    contents: [{ role: 'user', parts: [part, { text: transcribePrompt(script) }] }],
-    config: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 65536, ...(/flash/.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}) },
+  const ctl = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { ctl.abort(); reject(Object.assign(new Error(`no answer within ${Math.round(TRANSCRIBE_TIMEOUT_MS / 1000)} s`), { timeout: true })); }, TRANSCRIBE_TIMEOUT_MS);
   });
-  return r.text ?? '';
+  try {
+    const r = await Promise.race([gemini().models.generateContent({
+      model,
+      contents: [{ role: 'user', parts: [part, { text: transcribePrompt(script) }] }],
+      config: {
+        responseMimeType: 'application/json', temperature: 0, maxOutputTokens: TRANSCRIBE_MAX_TOKENS, abortSignal: ctl.signal,
+        ...(/flash/.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+      },
+    }), timeout]);
+    return r.text ?? '';
+  } finally { clearTimeout(timer); }
 };
 export const setTranscribe = (fn: typeof transcribeAudio) => { transcribeAudio = fn; };
 
@@ -195,21 +217,22 @@ export function transcribeRoutes(blobs: Blobs) {
       const mime = audioMime(info.contentType);
       // on Vertex AI with the service account, Gemini reads the file straight from Cloud Storage; otherwise it is sent inline
       const viaGcs = config.storage === 'gcp' && !config.geminiApiKey;
-      let text = '';
+      let segments: Segment[] = [];
       try {
+        let text = '';
         if (viaGcs) {
           try { text = await transcribeAudio(model, { uri: blobs.uri(audioKey(hash)), mime }, script); }
-          catch (e) { if (info.size > INLINE_MAX) throw e; text = await transcribeAudio(model, { data: await readAll(blobs, audioKey(hash)), mime }, script); }
+          catch (e: any) { if (e?.timeout || info.size > INLINE_MAX) throw e; text = await transcribeAudio(model, { data: await readAll(blobs, audioKey(hash)), mime }, script); }
         } else {
           if (info.size > INLINE_MAX) return void res.status(413).json({ error: `The episode audio is ${Math.round(info.size / 1048576)} MB; transcription here handles up to 14 MB (about 15 minutes of MP3). Export it as MP3, or add subtitles.` });
           text = await transcribeAudio(model, { data: await readAll(blobs, audioKey(hash)), mime }, script);
         }
+        segments = parseSegments(text);
       } catch (e: any) {
         const msg = redact(String(e?.message || e));
         console.error('Gemini transcription error', msg);
-        return void res.status(502).json({ error: `Gemini could not transcribe the audio: ${msg}` });
+        return void res.status(e?.timeout ? 504 : 502).json({ error: `Gemini could not transcribe the audio: ${msg}.` });
       }
-      const segments = parseSegments(text);
       if (!segments.length) return void res.status(502).json({ error: 'Gemini returned no timed lines for this audio. Try again, or add subtitles.' });
       res.json({ segments, model });
     })().catch(next);

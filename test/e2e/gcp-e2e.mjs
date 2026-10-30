@@ -131,6 +131,8 @@ try {
   log(`episode uploaded in ${Math.ceil(buf.length / 8388608)} parts, verified by SHA-256, streams with ranges`);
 
   /* 5. rules auto-edit */
+  // with Gemini on the server, the import dialog transcribes and auto-edits first: wait until it closes
+  await page.locator('.overlay').waitFor({ state: 'detached', timeout: 300000 });
   await page.locator('textarea').first().fill(SCRIPT);
   await page.getByRole('radio', { name: /Rules/ }).click();
   await page.locator('button.btn.primary', { hasText: /^\s*Auto-edit( again)?\s*$/ }).click();
