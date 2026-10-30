@@ -36,7 +36,11 @@ export function prepareLines(doc: ProjectDoc, inp: AutoEditInput): { tagCues: Cu
   if (parsed.lines.length) {
     const old = doc.lines;
     alignLines(parsed.lines, inp.speech, inp.dialogueDur);
-    keepExact(old, parsed.lines);
+    // timings from subtitles or transcription that stop well before the speech in the audio ends are off: line the script up with the speech instead
+    const exactEnd = Math.max(0, ...old.filter((l) => l.exact && l.t1 != null).map((l) => l.t1!));
+    const speechEnd = inp.speech.length ? inp.speech[inp.speech.length - 1][1] : 0;
+    if (exactEnd && speechEnd && speechEnd - exactEnd > Math.max(8, speechEnd * 0.08)) notes.push(`The line timings end at ${Math.round(exactEnd)} s but the speech goes on to ${Math.round(speechEnd)} s, so the lines were lined up with the speech pauses instead.`);
+    else keepExact(old, parsed.lines);
     doc.lines = parsed.lines;
     if (!doc.product && inp.products?.length) {
       const g = guessProduct(doc.scriptText, inp.products);
@@ -68,7 +72,7 @@ export function finishEdit(doc: ProjectDoc, inp: AutoEditInput, cues: Cue[], not
   // cues the user switched off stay off
   const off = new Set(doc.cues.filter((c) => !c.on).map((c) => `${c.type}|${c.sound}|${c.line}`));
   for (const c of cues) if (off.has(`${c.type}|${c.sound}|${c.line}`)) c.on = false;
-  const r = placeCues(doc, cues, { assets: inp.assets, categories: inp.categories, productDisclaimers: inp.productDisclaimers });
+  const r = placeCues(doc, cues, { assets: inp.assets, categories: inp.categories, productDisclaimers: inp.productDisclaimers, speechEnd: inp.speech.length ? inp.speech[inp.speech.length - 1][1] : undefined });
   doc.cues = cues;
   return {
     lines: doc.lines.length,

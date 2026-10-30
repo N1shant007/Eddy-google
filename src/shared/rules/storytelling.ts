@@ -1,6 +1,6 @@
 import type { Cue, ScriptLine } from './types';
 import {
-  ACK_RE, BENEFIT_RE, BRAND_RE, CAUTION_NOT, CAUTION_RE, CTA_RE, GUEST_RE, INSIGHT_MOOD, INSIGHT_RE, INTEREST_RE,
+  ACK_RE, BENEFIT_RE, BRAND_RE, CAUTION_NOT, CAUTION_RE, CTA_RE, MID_CTA_RE, GUEST_RE, INSIGHT_MOOD, INSIGHT_RE, INTEREST_RE,
   MOOD_MAP, NO_COST_RE, NUMBER_RE, PRODUCT_RE, QUESTION_RE, SAVINGS_RE, TAKEAWAY_RE, VALUE_RE,
 } from './patterns';
 import { cueId } from './script';
@@ -41,8 +41,17 @@ export function lineMoods(lines: ScriptLine[], hosts: Set<string>): Mood[] {
   for (let i = Math.max(lastGuest + 1, Math.floor(N * 0.6)); i < N; i++) if (hosts.has(lines[i].speaker) && (CTA_RE.test(lines[i].text || '') || BRAND_RE.test(lines[i].text || ''))) { cta = i; break; }
   if (cta < 0) for (let i = N - 1; i >= Math.floor(N * 0.75); i--) { if (hosts.has(lines[i].speaker) && (CTA_RE.test(lines[i].text || '') || BRAND_RE.test(lines[i].text || ''))) cta = i; else if (cta >= 0) break; }
   if (cta < 0 && lastGuest >= 0 && lastGuest < N - 1 && lastGuest >= N * 0.6) cta = lastGuest + 1;
+  // calls to action earlier in the episode: each one gets the intro music too (with the host lines that carry it on)
+  const midCta = new Set<number>();
+  for (let i = 2; i < (cta >= 0 ? cta : N); i++) {
+    if (!hosts.has(lines[i].speaker) || !MID_CTA_RE.test(lines[i].text || '')) continue;
+    midCta.add(i);
+    for (let j = i + 1; j < (cta >= 0 ? cta : N) && hosts.has(lines[j].speaker) && (MID_CTA_RE.test(lines[j].text || '') || CTA_RE.test(lines[j].text || '')); j++) { midCta.add(j); i = j; }
+  }
   lines.forEach((l, i) => {
     const t = (l.text || '').trim(), host = hosts.has(l.speaker);
+    // a call to action comes first (the intro music again), then a product introduced (story play)
+    if (midCta.has(i) || (host && cta >= 0 && i >= cta)) { out.push('cta'); if (pIntro.has(i) && !host) guestProduct = true; return; }
     if (pIntro.has(i)) { out.push('product'); if (!host) guestProduct = true; return; }
     const isQ = /\?\s*['"”]?\s*$/.test(t) || (QUESTION_RE.test(t) && /^[A-Zऀ-ॿ]/.test(t) && !/[.!]\s*$/.test(t)) ||
       (/\b(but|lekin|par|doubt|confus|samajh nahi)\b/i.test(t) && /\?|\bhow\b|kitna|kaise|\bkya\b|doubt|\bwhat\b|\bwhich\b/i.test(t));

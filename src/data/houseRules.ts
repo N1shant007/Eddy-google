@@ -1,6 +1,10 @@
 /* House rules every guideline set carries, added where missing (presets, saved sets and new sets). */
 export const CTA_RULE =
+  'CTA: Every time there is a call to action, anywhere in the episode (visit the website, download or use the app, apply now, use the EMI calculator…), play the same intro music again, lightly and low under the voices, for the whole CTA. No other background music plays during it. After a CTA in the middle of the episode the storytelling music carries on; after the final CTA the outro follows.';
+/** the CTA line before multiple CTAs were covered (replaced where it is still word for word) */
+const OLD_CTA_RULE =
   'CTA: When the call to action begins (before the outro), play the same intro music again, lightly and low under the voices, for the whole CTA. No other background music plays during it; the outro follows.';
+const OUTRO_THEN_DISCLAIMER = 'The product disclaimer starts straight after the outro, then the closing AI disclaimer.';
 
 export const BENEFITS_RULE =
   'BENEFITS (MANDATORY): Play Coin Chime (Engagement) just after every line that mentions low interest rates (low, lower, competitive, attractive or "very good" rates, "kam byaj", "starting at X%"). Also play it just after lines stating a clear money benefit for the listener: no hidden charges, no prepayment charges, a low EMI, no pressure on the budget, no financial strain, or savings. Low-interest-rate chimes always play. Benefit chimes need at least 12 s between any two Coin Chimes. Place each one in the gap after the line, never on a key word. Gain -6 dB.';
@@ -44,7 +48,12 @@ function withSfxRules(t: string): string {
 
 /** the text with the house rules: product disclaimers, Coin Chime only (BENEFITS + SFX), and the CTA rule before OUTRO, else before MIX, else at the end */
 export function withHouseRules(text: string): string {
-  const t = withProductDisclaimers(withSfxRules(text || ''));
+  let t = withProductDisclaimers(withSfxRules(text || ''));
+  t = t.split('\n').map((l) => {
+    if (l.trim() === OLD_CTA_RULE) return CTA_RULE;
+    if (/^OUTRO:/.test(l.trim()) && !l.includes(OUTRO_THEN_DISCLAIMER)) return `${l.trimEnd()} ${OUTRO_THEN_DISCLAIMER}`;
+    return l;
+  }).join('\n');
   if (/^CTA:/m.test(t)) return t;
   if (/^OUTRO:/m.test(t)) return t.replace(/^OUTRO:/m, `${CTA_RULE}\nOUTRO:`);
   if (/^MIX:/m.test(t)) return t.replace(/^MIX:/m, `${CTA_RULE}\nMIX:`);

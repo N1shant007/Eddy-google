@@ -57,6 +57,8 @@ export interface PlaceContext {
   assets: Asset[];
   categories: Category[];
   productDisclaimers?: Record<string, string>;
+  /** where the speech in the episode audio ends (seconds into the file), from the audio itself */
+  speechEnd?: number;
 }
 export interface PlaceResult { placed: number; notes: string[]; missingStory: boolean }
 
@@ -162,7 +164,9 @@ export function placeCues(doc: ProjectDoc, cues: Cue[], ctx: PlaceContext): Plac
       introEnd = D + len; introAsset = asset;
     } else if (!L) { c.note = 'Line not on the timeline'; continue; }
     else if (c.type === 'outro') {
-      const Le = lineAbs(N - 1) || L;
+      // the outro follows the end of the speech: the last line, or the speech in the audio if that goes on longer
+      const Le0 = lineAbs(N - 1) || L, sp = ctx.speechEnd != null ? absOf(ctx.speechEnd) : null;
+      const Le = sp != null && sp > Le0.e ? { s: Le0.s, e: sp } : Le0;
       const olen = Math.min(asset.dur, Math.max(1, +st.outroLen || 7));
       clip = addClip(asset, tr, Math.max(0, Le.e - st.outroLead), { dur: olen, gain: g, fadeIn: 1.2, fadeOut: Math.min(2.5, olen / 3) });
     } else if (c.type === 'positioning' || c.type === 'bed') {
@@ -255,7 +259,8 @@ export function placeCues(doc: ProjectDoc, cues: Cue[], ctx: PlaceContext): Plac
   noOverlapMusic();
   fillMusicGaps();
   noOverlapMusic();
-  const pdNote = placeDisclaimers(doc, ctx.assets, ctx.categories, ctx.productDisclaimers);
+  const spEnd = ctx.speechEnd != null ? absOf(ctx.speechEnd) : null;
+  const pdNote = placeDisclaimers(doc, ctx.assets, ctx.categories, ctx.productDisclaimers, spEnd ?? undefined);
   if (pdNote) notes.push(pdNote);
   pruneTracks(doc);
   if (missingStory) notes.push('Storytelling music is missing: add “story rewrite” and “story play” to the Storytelling category in the Audio library.');
@@ -270,7 +275,7 @@ const productDisclaimerCats = (categories?: Category[]) => new Set((categories |
     The product's disclaimer is the file the guideline names for it (PRODUCT DISCLAIMERS line, e.g. Home Loan: "2new hl DIS"),
     looked up in the Product Disclaimer category; otherwise a product disclaimer sound tagged with that product.
     Returns a note when the episode's product has no disclaimer. */
-export function placeDisclaimers(doc: ProjectDoc, assets: Asset[], categories?: Category[], named?: Record<string, string>): string | null {
+export function placeDisclaimers(doc: ProjectDoc, assets: Asset[], categories?: Category[], named?: Record<string, string>, speechEndAbs?: number): string | null {
   doc.clips = doc.clips.filter((c) => !c.fixed);
   if (!doc.clips.length) return null;
   const disc = assets.find((a) => a.role === 'disclaimer');
@@ -293,7 +298,17 @@ export function placeDisclaimers(doc: ProjectDoc, assets: Asset[], categories?: 
   if (!disc && !pd) return note;
   const tr = trackFor(doc, 'disclaimer');
   tr.duck = 0;
-  const end = r2(doc.clips.reduce((m, c) => Math.max(m, c.start + c.dur), 0) + 0.4);
+  // the closing disclaimers start right after the last sound (normally the outro). Silence left at the end of the
+  // episode audio after the speech does not push them back: that tail is trimmed off instead.
+  const dlg = doc.tracks.find((x) => x.kind === 'dialogue');
+  const isDlg = (c: Clip) => !!dlg && c.trackId === dlg.id && c.assetHash === doc.dialogueHash;
+  const others = doc.clips.reduce((m, c) => (isDlg(c) ? m : Math.max(m, c.start + c.dur)), 0);
+  const dlgEnd = doc.clips.reduce((m, c) => (isDlg(c) ? Math.max(m, c.start + c.dur) : m), 0);
+  let end: number;
+  if (speechEndAbs != null && dlgEnd > speechEndAbs + 0.5) {
+    end = r2(Math.max(others, speechEndAbs) + 0.4);
+    for (const c of doc.clips) if (isDlg(c) && c.start + c.dur > end) c.dur = r2(Math.max(0.1, end - c.start));
+  } else end = r2(Math.max(others, dlgEnd) + 0.4);
   const add = (a: Asset, at: number, fixed: Clip['fixed']) => doc.clips.push({ id: newId('c_'), trackId: tr.id, assetHash: a.hash, start: r2(at), offset: 0, dur: a.dur, gain: 0, fadeIn: 0, fadeOut: 0, loop: false, auto: true, fixed });
   if (disc) add(disc, 0, 'start');
   let t = end;
