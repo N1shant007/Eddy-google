@@ -262,6 +262,26 @@ describe('Gemini transcription', () => {
     aiMod.setTranscribe(async () => '{"segments":[]}');
     expect((await call('/api/transcribe', { method: 'POST', json: { hash } })).status).toBe(502);
   });
+  it('keeps the complete lines when the reply is cut off, and never answers 500', async () => {
+    // reply cut off at the output limit: the complete segments are kept
+    aiMod.setTranscribe(async () => '{"segments":[{"start":1,"end":2.5,"speaker":"A","text":"One."},{"start":3,"end":4,"speaker":"B","text":"Two."},{"start":5,"end":6.12345678901234567890123');
+    const cut = await call('/api/transcribe', { method: 'POST', json: { hash } });
+    expect(cut.status).toBe(200);
+    expect((await cut.json()).segments.map((x: any) => x.text)).toEqual(['One.', 'Two.']);
+    // a model stuck printing digits: unparseable, so a clean 502 (not a 500)
+    aiMod.setTranscribe(async () => '{"segments":[{"start":0.' + '1'.repeat(5000));
+    const stuck = await call('/api/transcribe', { method: 'POST', json: { hash } });
+    expect(stuck.status).toBe(502);
+    expect((await stuck.json()).error).toMatch(/no timed lines/);
+    // no answer in time: 504 with a clear message
+    aiMod.setTranscribe(async () => { throw Object.assign(new Error('no answer within 90 s'), { timeout: true }); });
+    const slow = await call('/api/transcribe', { method: 'POST', json: { hash } });
+    expect(slow.status).toBe(504);
+    expect((await slow.json()).error).toMatch(/90 s/);
+  });
+  it('parses a reply wrapped in a code fence or given as a bare list', () => {
+    expect(aiMod.parseSegments('```json\n[{"start":"1:05","end":66,"speaker":"x","text":"hi"}]\n```')).toEqual([{ start: 65, end: 66, speaker: 'X', text: 'hi' }]);
+  });
   it('needs uploaded audio and a session', async () => {
     expect((await call('/api/transcribe', { method: 'POST', json: { hash: 'f'.repeat(64) } })).status).toBe(404);
     expect((await call('/api/transcribe', { method: 'POST', json: { hash: 'nope' } })).status).toBe(400);
