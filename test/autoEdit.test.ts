@@ -184,6 +184,23 @@ describe('auto-edit (Bajaj storytelling rules)', () => {
     }
   });
 
+  it('finds the ending disclaimer even when its category has another role and the sound has no product tag', () => {
+    const endCat: Category = { id: 'k_end_hl', name: 'ending home loan disclaimer', role: 'sfx' };
+    const hl = A('hl2', '2new hl DIS', 'k_engage', 12);
+    hl.categoryId = 'k_end_hl'; hl.role = 'sfx'; hl.product = undefined;
+    const lib2 = { ...lib, categories: [...cats, endCat], assets: [...lib.assets.filter((a) => a.hash !== 'pdisc'), hl] };
+    for (const product of ['Home Loan', '']) {
+      const doc = makeDoc();
+      doc.scriptText = 'SHWETA: Welcome to the show.\nKARAN: Interest rates are low.\nSHWETA: Thanks for listening!';
+      doc.product = product;
+      autoEdit(doc, lib2);
+      const p = doc.clips.find((c) => c.fixed === 'product'), e = doc.clips.find((c) => c.fixed === 'end')!;
+      expect(p?.assetHash, `product "${product}"`).toBe('hl2');
+      expect(e.start).toBeGreaterThan(p!.start);
+      expect(doc.clips.filter((c) => c.assetHash === 'hl2').length).toBe(1); // never used as a sound effect too
+    }
+  });
+
   it('keeps manually placed clips through a re-run', () => {
     const { doc } = run();
     const sfx = trackFor(doc, 'sfx');

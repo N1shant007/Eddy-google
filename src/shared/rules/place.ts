@@ -63,7 +63,8 @@ const MUSIC_ROLES = new Set(['intro', 'outro', 'bed', 'positioning']);
 
 export function placeCues(doc: ProjectDoc, cues: Cue[], ctx: PlaceContext): PlaceResult {
   const st = doc.settings, N = doc.lines.length;
-  const lib = ctx.assets.filter((a) => a.role !== 'dialogue' && a.role !== 'disclaimer' && a.role !== 'pdisclaimer');
+  const endCats = endingDisclaimerCats(ctx.categories);
+  const lib = ctx.assets.filter((a) => a.role !== 'dialogue' && a.role !== 'disclaimer' && a.role !== 'pdisclaimer' && !endCats.has(a.categoryId) && !ENDING_HL.test(a.name.trim()));
   const byHash = new Map(ctx.assets.map((a) => [a.hash, a]));
   const catName = (a: Asset) => (ctx.categories.find((c) => c.id === a.categoryId)?.name || '').toLowerCase();
   const useCount: Record<string, number> = {};
@@ -260,6 +261,9 @@ export function placeCues(doc: ProjectDoc, cues: Cue[], ctx: PlaceContext): Plac
   return { placed, notes, missingStory };
 }
 
+const ENDING_HL = /^2new hl dis/i;
+const endingDisclaimerCats = (categories?: Category[]) => new Set((categories || []).filter((c) => /ending/i.test(c.name) && /disclaimer/i.test(c.name)).map((c) => c.id));
+
 /** fixed rule: AI disclaimer at the start; at the end the product disclaimer (if any) then the AI disclaimer */
 export function placeDisclaimers(doc: ProjectDoc, assets: Asset[], categories?: Category[]) {
   doc.clips = doc.clips.filter((c) => !c.fixed);
@@ -268,12 +272,14 @@ export function placeDisclaimers(doc: ProjectDoc, assets: Asset[], categories?: 
   const norm = (s?: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   // the closing product disclaimer: one from an "Ending … Disclaimer" category first (e.g. Ending Home Loan Disclaimer → “2new hl DIS”),
   // for the episode's product; with no product set, the ending Home Loan disclaimer
-  const ending = new Set((categories || []).filter((c) => /ending/i.test(c.name) && /disclaimer/i.test(c.name)).map((c) => c.id));
-  const pds = assets.filter((a) => a.role === 'pdisclaimer');
-  const rank = (a: Asset) => (ending.has(a.categoryId) ? 2 : 0) + (/^2new hl dis/i.test(a.name.trim()) ? 1 : 0);
+  const ending = endingDisclaimerCats(categories);
+  // any sound in an "Ending … Disclaimer" category or named "2new hl DIS" counts, whatever role its category has
+  const pds = assets.filter((a) => a.role === 'pdisclaimer' || ending.has(a.categoryId) || ENDING_HL.test(a.name.trim()));
+  const rank = (a: Asset) => (ending.has(a.categoryId) ? 2 : 0) + (ENDING_HL.test(a.name.trim()) ? 1 : 0);
   const best = (list: Asset[]) => list.slice().sort((a, b) => rank(b) - rank(a))[0];
   const product = norm(doc.product) || 'home loan';
-  const pd = best(pds.filter((a) => norm(a.product) === product)) || (doc.product ? undefined : best(pds.filter((a) => ending.has(a.categoryId))));
+  const forProduct = (a: Asset) => norm(a.product) === product || (!norm(a.product) && product === 'home loan' && (ending.has(a.categoryId) || ENDING_HL.test(a.name.trim())));
+  const pd = best(pds.filter(forProduct)) || (doc.product ? undefined : best(pds.filter((a) => ending.has(a.categoryId) || ENDING_HL.test(a.name.trim()))));
   if (!disc && !pd) return;
   const tr = trackFor(doc, 'disclaimer');
   tr.duck = 0;
